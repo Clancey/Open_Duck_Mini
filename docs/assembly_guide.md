@@ -187,7 +187,42 @@ Here is how to wire the feet
 
 ![feet](https://github.com/user-attachments/assets/d3376494-4690-4484-8352-132e6284731a)
 
+Here is the pin mapping on the Pi Zero header
 
+|       **LEDs**      | **Pi Zero Header Pin** | **Pi Zero Function** |
+|:-------------------:|:----------------------:|:--------------------:|
+|  Left Eye Anode (+) |           16           |        GPIO 23       |
+| Right Eye Anode (+) |           18           |        GPIO 24       |
+| Projector Anode (+) |           22           |        GPIO 25       |
+|  Common Cathode (-) |            6           |          GND         |
+|                     |                        |                      |
+|     **Antennas**    |                        |                      |
+|       Left PWM      |           32           |     GPIO 12 (PWM)    |
+|      Right PWM      |           33           |     GPIO 13 (PWM)    |
+|          5V         |            2           |          5V          |
+|         GND         |            6           |          GND         |
+|                     |                        |                      |
+|  **Foot Switches**  |                        |                      |
+|      Left Foot      |           15           |        GPIO 22       |
+|      Right Foot     |           13           |        GPIO 27       |
+|         GND         |            9           |          GND         |
+|                     |                        |                      |
+|      **BNO055**     |                        |                      |
+|         VIN         |            1           |          3V3         |
+|         3VO         |           NC           |           -          |
+|         GND         |            9           |          GND         |
+|         SDA         |            3           |        GPIO 2        |
+|         SCL         |            5           |        GPIO 3        |
+|         RST         |           NC           |           -          |
+|                     |                        |                      |
+|    **MAX98357A**    |                        |                      |
+|         LRC         |           35           |        GPIO 19       |
+|         BCLK        |           12           |        GPIO 18       |
+|         DIN         |           40           |        GPIO 21       |
+|         GAIN        |           NC           |           -          |
+|          SD         |           NC           |           -          |
+|         GND         |            6           |          GND         |
+|         VIN         |            2           |          5V          |
 
 ### Battery pack
 
