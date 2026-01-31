@@ -76,6 +76,8 @@ Chinese: https://zihao-ai.feishu.cn/wiki/AfAtw69vRigXaRk5UkbcrAiLnJw?from=from_c
 
 # Build Guide
 
+> New : you can now use the Tnkr guide ! https://tnkr.ai/explore/docs/open-duck-mini/open-duck-mini-v2#home
+
 Chinese: https://zihao-ai.feishu.cn/wiki/space/7488517034406625281
 
 ## Print Guide
