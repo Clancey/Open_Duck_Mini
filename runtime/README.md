@@ -32,9 +32,11 @@ The Phase 4 integration includes:
 
 - **Eyes — end-to-end wiring (hardware-recovered)**: two bugs that only surfaced on the robot are fixed. `RealRobot.connect()` used to build `Eyes()` then immediately `stop()` it, which deinitialised the GPIO pins so every later `set_eyes()` wrote to dead pins (the swallowed exception meant the eyes never lit); `connect()` no longer stops the eyes. `_drive_show()` handled `sound`/`projector` events but silently dropped `eye` events, so clip cues (`wide`/`blink`/`happy`) never reached hardware; it now routes them via `set_eye_event` (mock-safe `getattr`). `eyes.py` was rewritten so a single background thread owns a natural idle blink (lit baseline; 0.12 s dark flicks; uniform 2–6 s interval; ~18% spontaneous double-blink) with thread-safe cues; `set_eyes` maps to `note_authored` (a 1→0 authored edge = a blink, no longer forcing the eyes dark) and clip cues take precedence over the idle loop, then idle resumes.
 
+- **Eyes — sustained wide/fear mode**: real fear reads as wide-eyed with *suppressed blinking* for the whole cower, then a release burst — not a one-shot. `Eyes.enter_wide_hold()` holds the eyes lit and suppresses idle blinking indefinitely; `release_wide_hold()` ends it with a burst of relief blinks. Because a state that must be *released* can otherwise be stranded by a cancelled or aborted clip (whose `release` event never fires), the state carries a safety timeout (**8 s** default) that auto-releases with the same relief burst, and `RealRobot.shutdown_show()` releases it silently on FAULT / e-stop / BOOT — it is not possible to get stuck wide-eyed forever. The eyes are two **binary on/off LEDs** (no PWM/brightness/RGB/eyelid radius), so "wide" and "slow blink" are expressed purely through *timing and blink behaviour*, never aperture: `slow_blink` is one long, heavy lid close/open (for `sleepy`/`content`/`sad`), and `squint` (a partial aperture the hardware cannot produce) maps to an explicit **no-op** rather than a fake blink. Cues are wired through `set_eye_event` (`fear`/`wide_hold`/`cower` → enter; `release`/`relief`/`calm` → release; `slow_blink`/`sleepy` → slow blink), reachable end-to-end from a clip show event.
+
 - **IMU optional for non-balancing paths (hardware-recovered, safety-hardened)**: `connect()` tolerates an unavailable BNO055 (I2C disabled) by degrading to `self.imu = None` with a loud warning, so the dock / head-only demo runs on a bench without an IMU. `read()` reports `SensorSnapshot.tilt_valid`; a zero placeholder tilt is flagged invalid so it can never be mistaken for "upright". The FSM **requires** valid tilt sensing for the balancing modes: STAND/WALK refuse to be entered — and latch FAULT if entered — when `tilt_valid` is False. Only DOCK_DEMO / head paths may run IMU-less.
 
-- **Test Suite**: 71 unit and integration tests covering FSM transitions, animation playback, mock hardware, safety constraints, the antenna consent gate (`tests/test_real_robot.py`), the recovered eye wiring and idle-blink composition (`tests/test_eyes.py`), and the IMU-optional tilt-validity gating (`tests/test_fsm.py`, `tests/test_real_robot.py`).
+- **Test Suite**: 79 unit and integration tests covering FSM transitions, animation playback, mock hardware, safety constraints, the antenna consent gate (`tests/test_real_robot.py`), the recovered eye wiring and idle-blink composition, the sustained wide/fear mode (blink suppression while held, the relief burst on release, the safety-timeout auto-release, and that a FAULT/shutdown release cannot leave the eyes stuck) (`tests/test_eyes.py`, `tests/test_real_robot.py`), and the IMU-optional tilt-validity gating (`tests/test_fsm.py`, `tests/test_real_robot.py`).
 
 ## Getting the Code
 
@@ -49,7 +51,7 @@ cd Open_Duck_Mini_Runtime
 
 ### Fallback path — apply the patch onto a different base
 
-To re-apply the same change onto upstream `apirrone/Open_Duck_Mini_Runtime@v2` (or any other base), use the patch in this directory. It is a standard `git format-patch` artifact — now a single file containing the **three** commits of `v2..feature/animation-engine` (the Phase 4 integration, the non-actuating-connect/antenna-defer fix, and the hardware-recovered eye + IMU fixes):
+To re-apply the same change onto upstream `apirrone/Open_Duck_Mini_Runtime@v2` (or any other base), use the patch in this directory. It is a standard `git format-patch` artifact — now a single file containing the **four** commits of `v2..feature/animation-engine` (the Phase 4 integration, the non-actuating-connect/antenna-defer fix, the hardware-recovered eye + IMU fixes, and the sustained wide/fear eye mode):
 
 ```bash
 git clone -b v2 https://github.com/apirrone/Open_Duck_Mini_Runtime
@@ -58,7 +60,7 @@ git am /path/to/runtime/0001-animation-engine.patch
 # or, if you do not want commits: git apply /path/to/runtime/0001-animation-engine.patch
 ```
 
-The patch is verified to apply cleanly onto `v2` with `git apply --check` and `git am` (fresh clone), after which all 71 runtime tests pass.
+The patch is verified to apply cleanly onto `v2` with `git apply --check` and `git am` (fresh clone), after which all 79 runtime tests pass.
 
 ## Setting Up a Fresh Raspberry Pi (Pi Zero 2 W, Debian 13 trixie, Python 3.13)
 
@@ -212,7 +214,7 @@ Recorded during the first physical bring-up of the robot (Open Duck Mini v2, Pi 
 - **Engine cost on-Pi vs sim**: `Engine.evaluate` measured **~732 µs/tick** on the Pi (idle_alive, mean; p95 856 µs) versus **665 µs** in sim — about 10% higher on-hardware, still tiny (~3.7% of the 20 ms budget). Per-tick control work was ~2.2 ms mean (~11% of budget, ~17.5 ms headroom).
 - **The head / dock path does NOT run the ONNX policy.** The head is driven by absolute head targets (policy bypassed), so the measured **0.777 ms** ONNX inference cost applies **only to STAND/WALK**, not to the dock/head-animation path. Budget headroom on the dock path is therefore even larger than the combined figure above.
 - **IMU-less validation**: `connect()` succeeded with the IMU-unavailable warning (I2C was disabled on this Pi), proving the optional-IMU degrade; the demo ran on a zeroed (`tilt_valid=False`) tilt snapshot, which is correct for a docked robot and is explicitly blocked from ever entering STAND/WALK.
-- **Eyes**: after the wiring fixes, the standalone eye test drove the LED pins with the background idle blink plus single/double/wide-hold cues, and the dock demo exercised the idle blink + clip eye cues together. (Physical left/right illumination is for the owner to eyeball.)
+- **Eyes**: after the wiring fixes, the standalone eye test drove the LED pins with the background idle blink plus single/double/wide-hold cues, the sustained wide/fear hold (blink-suppressed) with its relief-burst release and safety-timeout backstop, and the slow blink; the dock demo exercised the idle blink + clip eye cues together. (Physical left/right illumination is for the owner to eyeball.)
 
 > Not attempted: no walking (Rung 6) and no calibration that requires the robot to stand were run. Legs were never torqued except to hold `init_pos` in the dock. Standing/walking remains a separate, IMU-required, owner-supervised session.
 
@@ -243,4 +245,4 @@ cd Open_Duck_Mini_Runtime
 OPEN_DUCK_ANIM_HOME=/path/to/Open_Duck_Mini python -m pytest tests/ -q
 ```
 
-This runs all 71 runtime tests, including FSM transitions, mock hardware, animation playback, safety constraints, the antenna consent gate, the recovered eye wiring + idle-blink composition, and the IMU-optional tilt-validity gating. The `open_duck_anim` core library additionally has 247 tests in this repo (`python -m pytest tests/ -q` from the repo root).
+This runs all 79 runtime tests, including FSM transitions, mock hardware, animation playback, safety constraints, the antenna consent gate, the recovered eye wiring + idle-blink composition, the sustained wide/fear mode, and the IMU-optional tilt-validity gating. The `open_duck_anim` core library additionally has 247 tests in this repo (`python -m pytest tests/ -q` from the repo root).

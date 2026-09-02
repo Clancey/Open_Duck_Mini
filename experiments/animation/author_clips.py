@@ -421,14 +421,15 @@ def build_specs() -> List[ClipSpec]:
         name="mood_content", duration_s=d, loop_mode="wrap", requires_mode="stand",
         priority=0, blend_in_s=0.5, blend_out_s=0.5, show_blend_in_s=0.1,
         show_blend_out_s=0.1,
-        doc="Content/happy mood loop: high bright carriage, light quick rhythm.",
+        doc="Content/happy mood loop: high bright carriage, light quick rhythm, slow content blinks.",
         neck_pitch=sine(3 * f, 0.024, 0.0),               # light quick breath
         head_pitch=const(-0.10) + sine(3 * f, 0.018, np.pi),  # chin-up carriage
         head_yaw=drift((f, 0.085, 0.3), (2 * f, 0.05, 1.7), (3 * f, 0.028, 0.9)),
         head_roll=const(0.03) + drift((f, 0.045, 1.2), (2 * f, 0.024, 0.1)),
         antenna_l=ZERO, antenna_r=ZERO,
-        eyes=((0.0, 1), (1.5, 0), (1.62, 1), (3.5, 0), (3.62, 1),
-              (5.2, 0), (5.32, 1)),                       # frequent quick blinks
+        # Contentment reads as slow, relaxed lid closes (a real heavy blink on
+        # the LEDs via the slow_blink cue), not the crisp idle flick.
+        events=(("eye", "slow_blink", 1.6), ("eye", "slow_blink", 4.4)),
     ))
 
     # M2) Sad / dejected: low carriage (chin down), slow, a slight PERSISTENT
@@ -445,7 +446,9 @@ def build_specs() -> List[ClipSpec]:
         head_roll=const(0.07) + sine(f, 0.018, 0.5),      # persistent lean
         head_yaw=drift((f, 0.05, 0.2), (2 * f, 0.02, 1.0)),  # barely looks around
         antenna_l=ZERO, antenna_r=ZERO,
-        eyes=((0.0, 1), (4.0, 0), (4.55, 1)),             # one slow heavy blink
+        # One slow heavy blink — a genuine long lid close on the LEDs via the
+        # slow_blink cue (the per-frame track only ever rendered a crisp flick).
+        events=(("eye", "slow_blink", 4.0),),
     ))
 
     # M3) Sleepy / drowsy: very slow drift, head gradually settling then rousing
@@ -463,7 +466,8 @@ def build_specs() -> List[ClipSpec]:
         head_roll=const(0.03) + sine(f, 0.05, 0.3),       # slow heavy loll
         head_yaw=sine(f, 0.04, 1.0),                      # almost still
         antenna_l=ZERO, antenna_r=ZERO,
-        eyes=((0.0, 1), (2.2, 0), (3.1, 1), (7.5, 0), (8.7, 1)),  # long droopy closes
+        # Long droopy closes rendered as real heavy blinks via the slow_blink cue.
+        events=(("eye", "slow_blink", 2.2), ("eye", "slow_blink", 7.5)),
     ))
 
     # M4) Alert / attentive: upright, still, small SHARP scans with long stillness
@@ -510,8 +514,9 @@ def build_specs() -> List[ClipSpec]:
     # tiny fast tense micro-tremor (on the sub-follow-floor pitch/neck so it reads
     # as tension without asking the servo to track it), punctuated by two quick
     # darting glances with long frozen stillness between — stillness broken by
-    # sharp checks reads as fear far better than continuous motion. Wide eyes
-    # (per-frame track held open) with one rare blink. Antennas ZERO (loop rule).
+    # sharp checks reads as fear far better than continuous motion. Fear is
+    # wide-eyed with blinking SUPPRESSED (the sustained wide/fear eye hold), not
+    # a per-frame blink track. Antennas ZERO (loop rule).
     # Period 10.0 s: unused by any other background layer so nothing ever syncs.
     d = 10.0
     f = 1.0 / d
@@ -534,7 +539,12 @@ def build_specs() -> List[ClipSpec]:
                        (6.45, 0.0, "smooth"),
                        (10.0, 0.0, "hold")], loop=True, duration=d),
         antenna_l=ZERO, antenna_r=ZERO,
-        eyes=((0.0, 1), (6.0, 0), (6.08, 1)),                # wide, one rare quick blink
+        # Enter the sustained wide/fear hold (eyes wide, blinking suppressed) and
+        # refresh it within the 10 s loop — each fire is well under the eyes'
+        # safety timeout, so the hold stays continuous while the mood plays. When
+        # the mood ends the hold auto-releases via that timeout (or a calm_down
+        # releases it explicitly with a relief burst).
+        events=(("eye", "fear", 0.0), ("eye", "fear", 5.0)),
     ))
 
     # ---- B. Curiosity / attention (once) ------------------------------------
@@ -948,7 +958,10 @@ def build_specs() -> List[ClipSpec]:
                         (2.6, -0.10, "smooth"), (3.6, 0.0)]),  # stretch then flop
         antenna_r=keys([(0.0, 0.0), (1.0, 0.28, "ease_out"), (1.6, 0.26, "hold"),
                         (2.6, -0.10, "smooth"), (3.6, 0.0)]),
-        eyes=((0.0, 1), (0.8, 0), (2.2, 1)),              # long yawn eye-close (1.4s)
+        # The long yawn eye-close, as a real heavy lid close via the slow_blink
+        # cue (on binary LEDs the close duration is the cue's ~0.55 s, not the
+        # authored 1.4 s, but it is a genuine slow blink, not a crisp flick).
+        events=(("eye", "slow_blink", 0.8),),
     ))
 
     # E9) Affectionate: a warm lean-in nuzzle — tilt and lean toward, a soft bob,
@@ -1007,7 +1020,7 @@ def build_specs() -> List[ClipSpec]:
                         (2.8, 0.0)]),
         antenna_r=keys([(0.0, 0.0), (0.8, 0.10, "ease_out"), (2.0, 0.08, "hold"),
                         (2.8, 0.0)]),
-        eyes=((0.0, 1), (1.2, 0), (1.6, 1)),
+        events=(("eye", "slow_blink", 1.2),),             # a soft slow content blink
     ))
 
     # E12) Greeting: a friendly "hello" — a warm double bob with a tilt, antennas
@@ -1056,7 +1069,7 @@ def build_specs() -> List[ClipSpec]:
                         (2.4, -0.03, "smooth")]),                          # ears pin back fast, slow release
         antenna_r=keys([(0.0, 0.0), (0.26, -0.48, "smooth"), (1.2, -0.40, "hold"),
                         (2.4, -0.03, "smooth")]),
-        events=(("eye", "wide", 0.15),),                                   # eyes snap wide
+        events=(("eye", "fear", 0.15), ("eye", "release", 1.9)),           # snap wide (held), relief on the return
     ))
 
     # S2) Cower: shrink and make itself small — tuck the head down, turn and tilt
@@ -1079,7 +1092,10 @@ def build_specs() -> List[ClipSpec]:
                         (3.0, -0.03, "smooth")]),                          # ears pinned back, held
         antenna_r=keys([(0.0, 0.0), (0.3, -0.45, "smooth"), (2.4, -0.42, "hold"),
                         (3.0, -0.03, "smooth")]),
-        events=(("eye", "wide", 0.2),),
+        # Sustained wide/fear hold through the cower; release with a relief burst
+        # as it un-shrinks. A cancelled cower is caught by the eyes' safety
+        # timeout, so it can never stay wide-eyed forever.
+        events=(("eye", "fear", 0.2), ("eye", "release", 2.4)),
     ))
 
     # S3) Nervous look-around: tense scanning for a threat — quick darting checks
@@ -1103,18 +1119,20 @@ def build_specs() -> List[ClipSpec]:
                         (3.2, -0.02, "smooth")]),                           # wary half-back
         antenna_r=keys([(0.0, 0.0), (0.3, -0.25, "smooth"), (2.6, -0.22, "hold"),
                         (3.2, -0.02, "smooth")]),
-        events=(("eye", "wide", 0.1),),
+        events=(("eye", "fear", 0.1), ("eye", "release", 2.8)),             # wide/held while scanning, relief at the end
     ))
 
     # S4) Calm down: the RECOVERY beat — exit fear back to neutral so the emotion
     # never looks stuck. Starts in a held-tense withdrawn pose, then releases: the
     # chin lifts (relief), the head returns to face forward (safe), the ears un-pin
-    # and relax, and a flurry of relieved blinks settles to calm. Use after any
-    # fear beat, or to transition mood_scared -> a neutral/content mood.
+    # and relax, and a burst of relieved blinks settles to calm. THIS is the clip
+    # that explicitly releases a sustained wide/fear hold (e.g. from mood_scared),
+    # whose release fires the relief burst. Use after any fear beat, or to
+    # transition mood_scared -> a neutral/content mood.
     specs.append(ClipSpec(
         name="calm_down", authoring_path="blender", duration_s=3.4, loop_mode="once",
         requires_mode="stand", priority=19, blend_in_s=0.25, blend_out_s=0.5,
-        doc="Calm down: release from fear to neutral — un-tuck, un-pin ears, a flurry of relieved blinks.",
+        doc="Calm down: release from fear to neutral — un-tuck, un-pin ears, a burst of relieved blinks.",
         head_pitch=keys([(0.0, 0.10), (0.5, 0.10, "hold"), (1.1, -0.05, "ease_out"),
                          (1.9, 0.03, "smooth"), (3.4, 0.0, "smooth")]),    # held tense -> release/lift -> soft settle
         neck_pitch=keys([(0.0, 0.03), (0.5, 0.03, "hold"), (1.2, -0.02, "smooth"),
@@ -1127,8 +1145,11 @@ def build_specs() -> List[ClipSpec]:
                         (2.3, 0.0, "smooth"), (3.4, 0.0, "hold")]),        # ears un-pin and relax
         antenna_r=keys([(0.0, -0.40), (0.5, -0.40, "hold"), (1.3, 0.06, "ease_out"),
                         (2.3, 0.0, "smooth"), (3.4, 0.0, "hold")]),
-        eyes=((0.0, 1), (1.15, 0), (1.23, 1), (1.45, 0), (1.53, 1),
-              (1.78, 0), (1.86, 1)),                                       # a flurry of relieved blinks, then calm
+        # Release the sustained wide/fear hold as the chin lifts: this fires the
+        # burst of relieved blinks. A single soft settling blink afterwards keeps
+        # it alive when calm_down is played with nothing held (standalone).
+        events=(("eye", "release", 1.15),),
+        eyes=((0.0, 1), (2.3, 0), (2.4, 1)),
     ))
 
     # ---- D. Walk-compatible variants (small amplitude, requires_mode=walk) ---

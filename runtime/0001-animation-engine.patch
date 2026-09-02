@@ -1,7 +1,7 @@
 From cd88b70dc189879e8eb4e0d3d6cf078a71cc356b Mon Sep 17 00:00:00 2001
 From: James Clancey <james.clancey@gmail.com>
 Date: Wed, 2 Sep 2026 06:07:55 -0800
-Subject: [PATCH 1/3] Phase 4: wire open_duck_anim animation engine into the
+Subject: [PATCH 1/4] Phase 4: wire open_duck_anim animation engine into the
  on-robot runtime
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -7393,7 +7393,7 @@ index 0000000..383a40f
 From a6ae8f8400ad51af006b870a7bc1c3f558ea4e9f Mon Sep 17 00:00:00 2001
 From: James Clancey <james.clancey@gmail.com>
 Date: Wed, 2 Sep 2026 11:09:36 -0800
-Subject: [PATCH 2/3] anim: make connecting to the robot non-actuating (defer
+Subject: [PATCH 2/4] anim: make connecting to the robot non-actuating (defer
  antenna init)
 
 RealRobot.connect() constructed Antennas() unconditionally, and that
@@ -7767,7 +7767,7 @@ index 0000000..26d1832
 From 719050053dbc9099e254093d35e5b3fd52c56f10 Mon Sep 17 00:00:00 2001
 From: James Clancey <james.clancey@gmail.com>
 Date: Wed, 2 Sep 2026 12:21:52 -0800
-Subject: [PATCH 3/3] anim: recover hardware-validated eye + IMU fixes from
+Subject: [PATCH 3/4] anim: recover hardware-validated eye + IMU fixes from
  robot bring-up
 
 Recovers fixes made directly on the robot's SD card during physical
@@ -8651,6 +8651,510 @@ index 26d1832..111dc3f 100644
 +    snap = robot.read(OperatorInput())
 +    assert snap is not None
 +    assert snap.tilt_valid is True
+-- 
+2.53.0
+
+
+From b881bbdf145635a7bd616257442647db93cb97d2 Mon Sep 17 00:00:00 2001
+From: James Clancey <james.clancey@gmail.com>
+Date: Wed, 2 Sep 2026 15:27:22 -0800
+Subject: [PATCH 4/4] anim: add sustained wide/fear eye mode with blink
+ suppression and safe release
+
+Real fear reads as wide-eyed with suppressed blinking for the whole cower,
+then a release burst, but the eye driver only had fire-and-forget cues and a
+one-shot hold_open that lapsed after about a second. This adds a proper held
+state to the background blink thread. enter_wide_hold keeps the eyes lit and
+suppresses idle blinking indefinitely; release_wide_hold ends it with a burst
+of relief blinks. Because a held state that must be released can otherwise be
+stranded by a cancelled or aborted clip, whose release event never fires, the
+state carries a safety timeout, eight seconds by default, that auto-releases
+with the same relief burst, and RealRobot.shutdown_show releases it silently on
+FAULT, e-stop and BOOT. It is not possible to get stuck wide-eyed forever.
+
+The eyes are two binary on/off LEDs with no PWM, brightness, RGB or eyelid
+radius, so wide and slow blink are expressed purely through timing and blink
+behaviour, never aperture. slow_blink is added as one long heavy lid close and
+open for sleepy, content and sad. squint would need a partial aperture the
+hardware cannot produce, so set_eye_event maps it to an explicit no-op rather
+than faking it with a blink. The new cues are wired through set_eye_event so a
+clip show event can enter, hold and release the state end to end.
+
+Tests drive the real background thread with injected board and digitalio fakes
+and cover entering, holding and releasing the state, blink suppression while
+held, the relief burst on release, the safety-timeout auto-release, and that a
+silent shutdown release cannot leave the eyes stuck. The suite grows from 71 to
+79 tests, all green.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../mini_bdx_runtime/anim/real_robot.py       |  39 +++++-
+ mini_bdx_runtime/mini_bdx_runtime/eyes.py     | 121 ++++++++++++++++--
+ tests/test_eyes.py                            | 116 +++++++++++++++++
+ tests/test_real_robot.py                      |  51 ++++++++
+ 4 files changed, 311 insertions(+), 16 deletions(-)
+
+diff --git a/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py b/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
+index 9278c11..71f1ee6 100644
+--- a/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
++++ b/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
+@@ -240,18 +240,39 @@ class RealRobot(RobotInterface):
+     def set_eye_event(self, value: str) -> None:
+         """Apply a discrete expressive eye cue from a clip show event.
+ 
+-        Maps the authored cue vocabulary onto the on/off LED hardware:
+-        ``blink`` -> one blink, ``happy`` -> quick double-blink, ``wide`` /
+-        ``startle`` -> hold the eyes wide (suppress blinking) briefly. Unknown
+-        cues fall back to a single blink."""
++        Maps the authored cue vocabulary onto the on/off LED hardware (two binary
++        channels; no PWM/RGB/eyelid radius, so aperture cues can't be honest):
++
++        * ``blink`` -> one blink; ``happy`` -> quick double-blink.
++        * ``wide`` / ``startle`` -> a brief one-shot wide hold.
++        * ``fear`` / ``wide_hold`` / ``cower`` -> *enter* the sustained wide/fear
++          state (eyes wide, idle blinking suppressed) until released.
++        * ``release`` / ``relief`` / ``calm`` -> *release* it with a relief burst.
++        * ``slow_blink`` / ``sleepy`` -> one long, heavy lid close/open.
++        * ``squint`` -> a partial aperture, which binary LEDs cannot express;
++          intentionally a no-op rather than a fake blink.
++
++        Unknown cues fall back to a single blink."""
+         if self.eyes is None:
+             return
+         v = str(value).lower()
+         try:
+-            if v in ("wide", "startle", "alert", "open"):
++            if v in ("fear", "wide_hold", "cower", "afraid"):
++                self.eyes.enter_wide_hold()
++            elif v in ("release", "wide_release", "fear_release", "relief",
++                       "calm", "unhold"):
++                self.eyes.release_wide_hold()
++            elif v in ("slow_blink", "slow", "sleepy", "heavy_blink"):
++                self.eyes.slow_blink()
++            elif v in ("wide", "startle", "alert", "open"):
+                 self.eyes.hold_open(1.0)
+             elif v in ("happy", "double", "double_blink"):
+                 self.eyes.double_blink()
++            elif v == "squint":
++                # Squint is a partial aperture; these eyes are binary on/off LEDs
++                # with no radius/PWM control, so it cannot be represented
++                # honestly. Deliberately a no-op (not a misleading blink).
++                pass
+             elif v in ("blink", "close", "closed"):
+                 self.eyes.blink()
+             else:
+@@ -281,6 +302,14 @@ class RealRobot(RobotInterface):
+     def shutdown_show(self) -> None:
+         self.set_antennas(0.0, 0.0)
+         self.set_projector(False)
++        # Failsafe: FAULT / e-stop / BOOT must always release a sustained
++        # wide/fear hold so the eyes can never be stranded wide. Silent release
++        # (no relief burst) — a fault is not a moment for expressive flair.
++        if self.eyes is not None:
++            try:
++                self.eyes.release_wide_hold(relief_blinks=0)
++            except Exception:
++                pass
+ 
+     def close(self) -> None:
+         for dev, meth in ((self.antennas, "stop"), (self.eyes, "stop"),
+diff --git a/mini_bdx_runtime/mini_bdx_runtime/eyes.py b/mini_bdx_runtime/mini_bdx_runtime/eyes.py
+index 40bc97e..efd0bbf 100644
+--- a/mini_bdx_runtime/mini_bdx_runtime/eyes.py
++++ b/mini_bdx_runtime/mini_bdx_runtime/eyes.py
+@@ -11,9 +11,22 @@ Design (matches the three-layer engine's background/triggered model):
+   with an occasional spontaneous double-blink. This runs whenever the eyes exist.
+ * **Triggered overrides take precedence** — a clip eye event nudges the eyes:
+   ``blink`` (one blink now), ``double_blink`` (two quick blinks, e.g. "happy"),
+-  ``hold_open(seconds)`` (suppress blinking and stay wide, e.g. "startle"/"wide").
+-  The per-frame authored eye channel is honoured via :meth:`note_authored` (a
+-  1->0 edge = an authored blink).
++  ``hold_open(seconds)`` (suppress blinking and stay wide *briefly*, e.g. a
++  one-shot "startle"), ``slow_blink`` (one long, heavy lid close/open, e.g.
++  "sleepy"/"content"). The per-frame authored eye channel is honoured via
++  :meth:`note_authored` (a 1->0 edge = an authored blink).
++* **Sustained wide/fear mode** — :meth:`enter_wide_hold` holds the eyes wide
++  and *suppresses idle blinking indefinitely* (frightened things don't blink),
++  until :meth:`release_wide_hold` fires a burst of relief blinks. Unlike the
++  fire-and-forget cues this is a *state* that must be released; a safety timeout
++  (``wide_hold_timeout``, default 8 s) is a backstop so a cancelled clip can
++  never leave the eyes stuck wide forever — the timeout auto-releases with the
++  same relief burst.
++
++Hardware note: these are two *binary* on/off LED channels (no PWM, brightness,
++RGB or eyelid radius), so "wide" and "slow blink" are expressed purely through
++*timing and blink behaviour*, never aperture. A "squint" (partial aperture)
++cannot be represented on this hardware and is deliberately not faked here.
+ 
+ ALL pin writes happen on the single background thread, so external callers only
+ set thread-safe flags — there is never a cross-thread race on the LEDs.
+@@ -31,7 +44,8 @@ RIGHT_EYE_PIN = board.D23
+ 
+ class Eyes:
+     def __init__(self, blink_duration=0.12, min_interval=2.0, max_interval=6.0,
+-                 double_blink_prob=0.18, double_gap=0.16):
++                 double_blink_prob=0.18, double_gap=0.16, slow_blink_duration=0.55,
++                 wide_hold_timeout=8.0, relief_blinks=3, max_burst=3):
+         self.left_eye = digitalio.DigitalInOut(LEFT_EYE_PIN)
+         self.left_eye.direction = digitalio.Direction.OUTPUT
+         self.right_eye = digitalio.DigitalInOut(RIGHT_EYE_PIN)
+@@ -42,10 +56,21 @@ class Eyes:
+         self.max_interval = max_interval
+         self.double_blink_prob = double_blink_prob
+         self.double_gap = double_gap
++        self.slow_blink_duration = float(slow_blink_duration)
++        # Safety backstop: the sustained wide/fear state auto-releases after at
++        # most this many seconds, so a cancelled clip (whose release event never
++        # fires) can never leave the eyes stuck wide forever.
++        self.wide_hold_timeout = float(wide_hold_timeout)
++        self.relief_blinks = int(relief_blinks)
++        self.max_burst = int(max_burst)
+ 
+         self._lock = Lock()
+         self._blink_requests = 0        # pending explicit blinks (expressive cues)
++        self._slow_requests = 0         # pending slow (heavy) blinks
++        self._slow_close = self.slow_blink_duration
+         self._hold_until = 0.0          # monotonic time to suppress auto-blink until
++        self._fear_active = False       # sustained wide/fear state (blink-suppressed)
++        self._fear_until = 0.0          # safety-timeout deadline for the fear state
+         self._authored_prev = 1         # last per-frame authored eye state (1=open)
+         self._lit = False
+ 
+@@ -70,6 +95,23 @@ class Eyes:
+         time.sleep(self.blink_duration)
+         self._set_eyes(True)
+ 
++    def _do_burst(self, n):
++        """Blink ``n`` times back to back (capped at ``max_burst``), e.g. the
++        relief flurry when the fear state is released."""
++        count = max(1, min(int(n), self.max_burst))
++        for i in range(count):
++            if i:
++                time.sleep(self.double_gap)
++            self._do_blink()
++
++    def _do_slow_blink(self, close):
++        """A single long, heavy lid close/open. On binary LEDs this is just a
++        longer dark dwell than the crisp idle flick — the 'sleepy'/'content'
++        feel comes entirely from the timing."""
++        self._set_eyes(False)
++        time.sleep(max(0.0, float(close)))
++        self._set_eyes(True)
++
+     # -- thread-safe public cues (called from the control loop) --------------
+     def blink(self, n=1):
+         """Request ``n`` explicit blink(s) as soon as possible."""
+@@ -81,14 +123,55 @@ class Eyes:
+         with self._lock:
+             self._blink_requests += 2
+ 
++    def slow_blink(self, n=1, close=None):
++        """One (or ``n``) long, heavy lid close/open (e.g. 'sleepy'/'content'/
++        'sad'). Suppressed while a wide/fear hold is active."""
++        with self._lock:
++            self._slow_requests += max(1, int(n))
++            if close is not None:
++                self._slow_close = float(close)
++
+     def hold_open(self, seconds=1.0):
+-        """Suppress idle blinking and keep the eyes wide for ``seconds`` (e.g.
+-        'startle'/'wide')."""
++        """Suppress idle blinking and keep the eyes wide for ``seconds`` (a
++        one-shot 'startle'). For a sustained, explicitly-released fear state use
++        :meth:`enter_wide_hold`."""
+         with self._lock:
+             self._hold_until = max(self._hold_until, time.monotonic() + float(seconds))
+             self._blink_requests = 0
+         self._set_eyes(True)
+ 
++    def enter_wide_hold(self, timeout=None):
++        """Enter the sustained wide/fear state: eyes held lit and idle blinking
++        suppressed *indefinitely* until :meth:`release_wide_hold`. A safety
++        timeout (``wide_hold_timeout`` unless overridden) auto-releases the state
++        as a backstop, so a cancelled/aborted clip can never leave the eyes
++        stuck wide."""
++        t = self.wide_hold_timeout if timeout is None else float(timeout)
++        with self._lock:
++            self._fear_active = True
++            self._fear_until = time.monotonic() + t
++            self._blink_requests = 0
++            self._slow_requests = 0
++        self._set_eyes(True)
++
++    def release_wide_hold(self, relief_blinks=None):
++        """Release the sustained wide/fear state. If it was active, emit a burst
++        of relief blinks (``relief_blinks``; pass 0 for a silent release, as on
++        FAULT/e-stop). Idempotent — a no-op if no hold is active."""
++        n = self.relief_blinks if relief_blinks is None else max(0, int(relief_blinks))
++        with self._lock:
++            was = self._fear_active
++            self._fear_active = False
++            self._fear_until = 0.0
++            if was:
++                self._blink_requests += n
++                self._next_auto = time.monotonic() + self._rand_interval()
++
++    def is_wide_held(self):
++        """True while the sustained wide/fear state is active (test/telemetry)."""
++        with self._lock:
++            return self._fear_active
++
+     def note_authored(self, state):
+         """Honour a clip's per-frame eye channel: a 1->0 edge is an authored
+         blink. Baseline lighting is owned by the background loop, so a steady
+@@ -112,17 +195,31 @@ class Eyes:
+             while not self._stop_event.is_set():
+                 now = time.monotonic()
+                 with self._lock:
++                    # Safety backstop: auto-release a held wide/fear state once
++                    # its timeout elapses, emitting the same relief burst, so a
++                    # lost release event can never strand the eyes wide.
++                    if self._fear_active and now >= self._fear_until:
++                        self._fear_active = False
++                        self._fear_until = 0.0
++                        self._blink_requests += self.relief_blinks
++                        self._next_auto = now + self._rand_interval()
++                    fear = self._fear_active
+                     req = self._blink_requests
+                     self._blink_requests = 0
+-                    holding = now < self._hold_until
++                    slow = self._slow_requests
++                    self._slow_requests = 0
++                    slow_close = self._slow_close
++                    holding = fear or now < self._hold_until
+                 if holding:
++                    # Wide/fear or a one-shot hold: stay lit, drop queued blinks.
+                     if not self._lit:
+                         self._set_eyes(True)
++                elif slow > 0:
++                    self._do_slow_blink(slow_close)
++                    with self._lock:
++                        self._next_auto = time.monotonic() + self._rand_interval()
+                 elif req > 0:
+-                    self._do_blink()
+-                    if req >= 2:
+-                        time.sleep(self.double_gap)
+-                        self._do_blink()
++                    self._do_burst(req)
+                     with self._lock:
+                         self._next_auto = time.monotonic() + self._rand_interval()
+                 elif now >= self._next_auto:
+@@ -142,6 +239,8 @@ class Eyes:
+ 
+     def stop(self):
+         self._stop_event.set()
++        with self._lock:
++            self._fear_active = False
+         try:
+             self._thread.join(timeout=1.0)
+         except Exception:
+diff --git a/tests/test_eyes.py b/tests/test_eyes.py
+index 8cc4586..eaf8f00 100644
+--- a/tests/test_eyes.py
++++ b/tests/test_eyes.py
+@@ -79,6 +79,19 @@ def _darks_between(pin, t0, t1):
+     return sum(1 for (ts, v) in pin.transitions if t0 < ts <= t1 and v is False)
+ 
+ 
++def _max_dark_dwell(pin):
++    """Longest interval the pin stayed dark (a False followed by a True)."""
++    best = 0.0
++    trans = pin.transitions
++    for i in range(len(trans) - 1):
++        ts, v = trans[i]
++        if v is False:
++            nts, nv = trans[i + 1]
++            if nv is True:
++                best = max(best, nts - ts)
++    return best
++
++
+ def test_eyes_lit_at_baseline(eyes_module):
+     eyes_mod, left, right = eyes_module
+     # Long idle interval so no idle blink fires during the check.
+@@ -150,3 +163,106 @@ def test_authored_falling_edge_triggers_blink(eyes_module):
+         assert left.value is True        # not left dark
+     finally:
+         e.stop()
++
++
++# --- sustained wide/fear mode: hold, suppress blinking, relief burst on release
++def test_wide_hold_suppresses_idle_blink_then_release_bursts(eyes_module):
++    """enter_wide_hold holds the eyes wide with idle blinking fully suppressed;
++    release_wide_hold ends it with a burst of relief blinks."""
++    eyes_mod, left, right = eyes_module
++    # Fast idle (0.05 s) would flick ~8x during the hold, absent suppression.
++    e = eyes_mod.Eyes(blink_duration=0.02, min_interval=0.05, max_interval=0.05,
++                      double_blink_prob=0.0, double_gap=0.05, relief_blinks=3)
++    try:
++        time.sleep(0.05)
++        t_hold = time.monotonic()
++        e.enter_wide_hold(timeout=5.0)
++        time.sleep(0.4)
++        # Frightened things don't blink: zero dark flicks across the whole hold.
++        assert _darks_between(left, t_hold, time.monotonic()) == 0
++        assert left.value is True
++        assert e.is_wide_held() is True
++
++        t_rel = time.monotonic()
++        e.release_wide_hold()
++        time.sleep(0.35)
++        # Release produces a burst of relief blinks (not a single flick).
++        assert _darks_between(left, t_rel, t_rel + 0.35) >= 2
++        assert e.is_wide_held() is False
++    finally:
++        e.stop()
++
++
++def test_wide_hold_safety_timeout_auto_releases(eyes_module):
++    """A held wide/fear state must self-release after its safety timeout so a
++    cancelled clip (whose release event never fires) cannot strand the eyes."""
++    eyes_mod, left, right = eyes_module
++    e = eyes_mod.Eyes(blink_duration=0.02, min_interval=2.0, max_interval=2.0,
++                      double_blink_prob=0.0, double_gap=0.05, relief_blinks=2)
++    try:
++        time.sleep(0.05)
++        t0 = time.monotonic()
++        e.enter_wide_hold(timeout=0.2)   # backstop fires at ~0.2 s
++        time.sleep(0.15)                 # still inside the hold: no blinking
++        assert _darks_between(left, t0, time.monotonic()) == 0
++        assert e.is_wide_held() is True
++        time.sleep(0.5)                  # past the timeout -> auto-release
++        assert e.is_wide_held() is False
++        # Blinking resumed after the timeout (the relief burst; idle is 2 s off).
++        assert _darks_between(left, t0 + 0.2, time.monotonic()) >= 1
++        assert left.value is True
++    finally:
++        e.stop()
++
++
++def test_wide_hold_suppresses_authored_blinks(eyes_module):
++    """Per-frame authored eye edges must not blink through the fear hold."""
++    eyes_mod, left, right = eyes_module
++    e = eyes_mod.Eyes(blink_duration=0.02, min_interval=5.0, max_interval=5.0,
++                      double_blink_prob=0.0)
++    try:
++        time.sleep(0.05)
++        e.enter_wide_hold(timeout=5.0)
++        t0 = time.monotonic()
++        for _ in range(3):               # three authored 1->0 blink edges
++            e.note_authored(0)
++            e.note_authored(1)
++            time.sleep(0.03)
++        time.sleep(0.1)
++        assert _darks_between(left, t0, time.monotonic()) == 0
++        assert left.value is True
++    finally:
++        e.stop()
++
++
++def test_slow_blink_dwell_longer_than_idle_flick(eyes_module):
++    """slow_blink is one long heavy lid close/open: its dark dwell is far longer
++    than the crisp idle flick (the only honest way to say 'sleepy' on on/off
++    LEDs is via timing)."""
++    eyes_mod, left, right = eyes_module
++    e = eyes_mod.Eyes(blink_duration=0.02, min_interval=5.0, max_interval=5.0,
++                      double_blink_prob=0.0)
++    try:
++        time.sleep(0.05)
++        e.slow_blink(close=0.3)
++        time.sleep(0.45)
++        assert _max_dark_dwell(left) >= 0.2      # >> the 0.02 s idle flick
++        assert left.value is True
++    finally:
++        e.stop()
++
++
++def test_release_without_hold_is_noop(eyes_module):
++    """release_wide_hold with no active hold must not fire a spurious burst."""
++    eyes_mod, left, right = eyes_module
++    e = eyes_mod.Eyes(blink_duration=0.02, min_interval=5.0, max_interval=5.0,
++                      double_blink_prob=0.0)
++    try:
++        time.sleep(0.05)
++        t0 = time.monotonic()
++        e.release_wide_hold()
++        time.sleep(0.15)
++        assert _darks_between(left, t0, time.monotonic()) == 0
++        assert e.is_wide_held() is False
++    finally:
++        e.stop()
+diff --git a/tests/test_real_robot.py b/tests/test_real_robot.py
+index 111dc3f..412703b 100644
+--- a/tests/test_real_robot.py
++++ b/tests/test_real_robot.py
+@@ -94,6 +94,7 @@ class _SpyEyes:
+     def __init__(self):
+         self.usable = True
+         self.stopped = False
++        self.wide_held = False       # sustained wide/fear state
+         self.authored = []          # note_authored() history (per-frame channel)
+         self.cues = []              # expressive cue history (blink/double/hold)
+ 
+@@ -117,6 +118,20 @@ class _SpyEyes:
+         self._require_usable()
+         self.cues.append(("hold_open", float(seconds)))
+ 
++    def slow_blink(self, n=1, close=None):
++        self._require_usable()
++        self.cues.append(("slow_blink", int(n)))
++
++    def enter_wide_hold(self, timeout=None):
++        self._require_usable()
++        self.cues.append(("enter_wide_hold", timeout))
++        self.wide_held = True
++
++    def release_wide_hold(self, relief_blinks=None):
++        self._require_usable()
++        self.cues.append(("release_wide_hold", relief_blinks))
++        self.wide_held = False
++
+     def stop(self):
+         self.stopped = True
+         self.usable = False
+@@ -253,6 +268,42 @@ def test_set_eye_event_maps_cues_to_hardware(fake_hw):
+     ]
+ 
+ 
++def test_set_eye_event_fear_enters_and_releases_sustained_hold(fake_hw):
++    """'fear'/'wide_hold' enters the sustained wide state; 'release'/'relief'
++    exits it. This is a state, not a one-shot hold_open."""
++    robot = _make()
++    robot.connect()
++    robot.set_eye_event("fear")
++    assert robot.eyes.wide_held is True
++    robot.set_eye_event("release")
++    assert robot.eyes.wide_held is False
++    assert [c[0] for c in robot.eyes.cues] == [
++        "enter_wide_hold", "release_wide_hold",
++    ]
++
++
++def test_set_eye_event_slow_blink_and_squint_no_op(fake_hw):
++    """slow_blink reaches the device; squint is a no-op (binary LEDs can't do a
++    partial aperture, so it must not fake a blink)."""
++    robot = _make()
++    robot.connect()
++    robot.set_eye_event("slow_blink")
++    robot.set_eye_event("squint")
++    assert robot.eyes.cues == [("slow_blink", 1)]
++
++
++def test_shutdown_show_releases_wide_hold_failsafe(fake_hw):
++    """FAULT / e-stop / BOOT go through shutdown_show, which MUST release a held
++    wide/fear state so the eyes can never be stranded wide. Silent release."""
++    robot = _make()
++    robot.connect()
++    robot.set_eye_event("fear")
++    assert robot.eyes.wide_held is True
++    robot.shutdown_show()
++    assert robot.eyes.wide_held is False
++    assert ("release_wide_hold", 0) in robot.eyes.cues
++
++
+ # --- IMU optional for dock/head, but tilt marked invalid (safety) -----------
+ def test_connect_tolerates_missing_imu(fake_hw, monkeypatch):
+     """A robot with I2C disabled (no BNO055) must still connect for the dock /
 -- 
 2.53.0
 

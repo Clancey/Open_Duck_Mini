@@ -23,12 +23,12 @@ emotional one-shot beats · **CS** scared/fear beats · **D** walk-compatible ·
 | `idle_breathe` | A | 6.0s | wrap | any | 0 | parametric | Slow breathing-like neck bob. The **default background** "alive" loop under standing/docked. |
 | `idle_scan` | A | 11.0s | wrap | any | 0 | parametric | Occasional slow head scan with holds over a breathing underlay. Long period so it never syncs with `idle_breathe`. |
 | `idle_lookaround` | A | 8.0s | wrap | any | 0 | parametric | Restless micro weight-shifts and gaze wander; detuned so it never quite repeats. |
-| `mood_content` | AM | 6.5s | wrap | stand | 0 | parametric | **Happy/content mood** to sit in: high bright head carriage, light quick rhythm, small bright wander, a perky persistent tilt, frequent quick blinks. Set as the base when things are going well. |
+| `mood_content` | AM | 6.5s | wrap | stand | 0 | parametric | **Happy/content mood** to sit in: high bright head carriage, light quick rhythm, small bright wander, a perky persistent tilt, soft slow content blinks. Set as the base when things are going well. |
 | `mood_sad` | AM | 9.5s | wrap | stand | 0 | parametric | **Sad/dejected mood**: low slow carriage, a slight persistent roll-tilt, long pauses, barely looks around, one slow heavy blink. Set on repeated failure / long neglect. |
 | `mood_sleepy` | AM | 12.0s | wrap | stand | 0 | parametric | **Sleepy/drowsy mood**: very slow drift, head settles then rouses slightly, a slow loll, long droopy eye-closes. Set on low battery / late / long idle. |
 | `mood_alert` | AM | 7.5s | wrap | stand | 0 | parametric | **Alert/attentive mood**: upright and still with small sharp scans and long stillness between; wide, rare blink. Set when watching for something. |
 | `mood_grumpy` | AM | 8.5s | wrap | stand | 0 | parametric | **Grumpy/annoyed mood**: a persistent cocked tilt, lowered carriage, terse sharp dismissive turn-aways, terse blinks. Set when repeatedly interrupted / poked. |
-| `mood_scared` | AM | 10.0s | wrap | stand | 0 | parametric | **Scared/frightened mood**: held small and withdrawn, tense frozen stillness broken by quick darting checks, wide eyes with rare blinks. Set on a persistent threat / an ongoing scary situation (use `calm_down` to exit it). |
+| `mood_scared` | AM | 10.0s | wrap | stand | 0 | parametric | **Scared/frightened mood**: held small and withdrawn, tense frozen stillness broken by quick darting checks, wide eyes with blinking suppressed (the sustained fear mode, re-armed each loop). Set on a persistent threat / an ongoing scary situation (use `calm_down` to exit it). |
 | `curious_tilt` | B | 2.6s | once | any | 10 | blender | Inquisitive head-roll tilt held briefly, with a blink. Trigger on "notices something". |
 | `look_toward` | B | 2.2s | once | any | 10 | blender | Directed look toward a point of interest, held, released. Trigger to point attention. |
 | `double_take` | B | 2.4s | once | stand | 12 | blender | Glance away then a quick snap-back double-take. Stand-only (snappy). Trigger for a surprise it re-checks. |
@@ -127,41 +127,49 @@ built here as **all three**:
   the wary recovery is what makes it fear, not startle), `cower` (a sustained
   shrink-small pose, ears pinned, held), `nervous_lookaround` (tense darting
   threat-checks). Antennas earn their keep here: a **fast pin-BACK** (ears
-  flattened) reads unmistakably as fear, and eyes go WIDE (the `wide` event).
+  flattened) reads unmistakably as fear, and eyes enter the **sustained wide/fear
+  mode** (the `("eye", "fear", t)` event — held wide with blinking suppressed for
+  the whole beat, then a `("eye", "release", t)` relief burst).
 * **A way out** — `calm_down` releases fear back to neutral (un-tuck, face
-  forward, ears un-pin, a flurry of relieved blinks). **Emotions that can only be
+  forward, ears un-pin, a flurry of relieved blinks — it fires `("eye",
+  "release", t)`, the explicit fear-mode release). **Emotions that can only be
   entered look broken**; this is the believable exit, and it also bridges
   `mood_scared` → a neutral or content mood.
 
 ### Eyes are an emotional channel
 
-Blink behaviour carries real emotional weight and the runtime supports three
-cues (see `runtime/pi/idle_service.py`, `EyeDriver`):
+Blink behaviour carries real emotional weight. The eyes are two **binary on/off
+LEDs** (no PWM/brightness/RGB/eyelid radius), so every expression is a matter of
+*timing and blink behaviour*, never aperture. The runtime supports:
 
-* the per-frame `eyes` track (0 = closed, 1 = open) — a **longer closed window
-  is a slower, heavier blink**. This is how `mood_sad` / `mood_sleepy` /
-  `sleepy_yawn` get their heavy, drowsy lids and how the mood loops set their
-  blink *cadence* (happy = frequent quick blinks, sad = one slow heavy blink,
-  sleepy = long droopy closes, alert = rare);
+* the per-frame `eyes` track (0 = closed, 1 = open) — on binary LEDs only the
+  1→0 *edge* registers (a crisp flick), so it sets blink *placement*, not
+  duration. Used where a beat needs a blink at an exact frame;
+* the `("eye", "slow_blink"|"sleepy", t)` event → **one long, heavy lid
+  close/open** (a settable dark dwell, ~0.55 s). This is how `mood_sad` /
+  `mood_sleepy` / `mood_content` / `sleepy_yawn` / `content_sigh` get their
+  heavy, drowsy/relaxed lids — a genuine slow blink rather than a hard close the
+  binary LED would render as an ordinary flick;
+* the `("eye", "fear"|"wide_hold"|"cower", t)` event → **enter the sustained
+  wide/fear mode**: eyes held wide with idle blinking *suppressed indefinitely*
+  (frightened things don't blink), until released;
+* the `("eye", "release"|"relief"|"calm", t)` event → **release** the fear mode
+  with a **burst of relief blinks**. A safety timeout (8 s) and the FAULT/e-stop
+  shutdown path both release it as a backstop, so a cancelled clip can never
+  leave the eyes stuck wide;
 * the `("eye", "wide"|"alert"|"startle"|"open", t)` event → **wide, held ~1 s**
-  (fear / alert / surprise);
+  (a one-shot startle / surprise; for sustained fear use `fear`/`release`);
 * the `("eye", "happy"|"double"|"double_blink", t)` event → a **rapid double
   blink** (excited / delighted / flustered).
 
-**Runtime gaps worth closing (named, not faked):** there is no **squint /
-half-closed held** cue, no **variable-speed blink** event, and no **sustained
-wide / suppressed-blink** mode. `suspicious_wary` would read sharper with a
-squint; `mood_sad` would benefit from a genuinely *slow* blink event rather than
-a long hard close; and **fear** (`mood_scared`, `cower`, `nervous_lookaround`)
-wants eyes held **wide for longer than the ~1 s the `wide` event lasts, with
-blinking suppressed** — real fear is wide-eyed and *doesn't* blink, then releases
-in a burst (which `calm_down` does do). Today the fear clips hold the per-frame
-`eyes` track open and fire `wide` where they can, which approximates it but the
-wide doesn't persist across a multi-second cower. All are currently approximated
-with the per-frame `eyes` track. If you extend the runtime, the three
-highest-value additions are: a `squint` (hold the lids partly closed), a
-`slow_blink` (eased close/open over a settable duration), and a `wide_hold` /
-`fear` mode (sustained wide with suppressed blinking until released).
+**One honest gap remains (named, not faked):** there is no **squint /
+half-closed held** cue, because these eyes are binary on/off LEDs with no eyelid
+radius or PWM — a partial aperture simply cannot be produced, so the runtime
+maps `("eye", "squint", t)` to an explicit **no-op** rather than a misleading
+blink. `suspicious_wary` would read sharper with a real squint, but that needs
+hardware the robot doesn't have. The other two previously-named gaps are now
+closed: `slow_blink` (a genuine eased close/open) and the `fear`/`wide_hold`
+sustained-wide-with-suppressed-blinking mode with an explicit relief release.
 
 ### Authoring emotion: build it from roll / pitch / timing / eyes — **not** `neck_pitch`
 
