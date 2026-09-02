@@ -250,12 +250,13 @@ def test_dock_head_targets_clamped_to_joint_limits_not_command_range():
 def test_envelope_on_by_default_enforces_combined_budget():
     """SAFETY DEFAULT (reviewer E3): a bare Engine() enforces DEFAULT_ENVELOPE.
 
-    A lone head_yaw=1.0 command must NOT pass through raw. With the corrected
-    dangerous-side normaliser (L_yaw = min(0.29, 1.50) = 0.29, reviewer E2), the
-    combined budget scales it to 0.55 * 0.29 = 0.1595 — 5.6x tighter than the old
-    commanded-side 0.9. Disabling requires the explicit unbounded() sentinel.
+    A head_yaw=2.0 command must NOT pass through raw. The per-channel clamp holds
+    it at the +-1.50 deflection limit, then the combined L2 budget (0.70) binds on
+    the lone axis (||c/L||2 = 1.5/1.5 = 1.0 > 0.70), scaling the settled output to
+    COMBINED_L2_BUDGET * L_yaw = 0.70 * 1.5 = 1.05. The key property: the raw 2.0
+    is enforced down. Disabling requires the explicit unbounded() sentinel.
     """
-    c = const_head_clip(1.0, loop_mode="wrap", blend_in_s=0.0)  # head_yaw = 1.0
+    c = const_head_clip(2.0, loop_mode="wrap", blend_in_s=0.0)  # head_yaw = 2.0
     eng = Engine()  # envelope ON by default
     eng.evaluate(0.0, "stand", Triggers(clips=[c]))
     out = None
@@ -263,7 +264,7 @@ def test_envelope_on_by_default_enforces_combined_budget():
     for _ in range(200):  # let the slew guard settle
         t += 0.02
         out = eng.evaluate(t, "stand")
-    assert out.head_command_offsets[HEAD_YAW] == pytest.approx(COMBINED_L2_BUDGET * 0.29, abs=1e-3)
+    assert out.head_command_offsets[HEAD_YAW] == pytest.approx(COMBINED_L2_BUDGET * 1.5, abs=1e-3)
 
 
 def test_envelope_disabled_only_via_unbounded_sentinel():
@@ -278,7 +279,7 @@ def test_envelope_disabled_only_via_unbounded_sentinel():
 def test_envelope_none_still_enforces():
     """Even an explicit head_envelope=None must enforce (reviewer E3): None is
     NOT a disable path, only unbounded() is."""
-    c = const_head_clip(1.0, loop_mode="wrap", blend_in_s=0.0)
+    c = const_head_clip(2.0, loop_mode="wrap", blend_in_s=0.0)
     eng = Engine(head_envelope=None)
     eng.evaluate(0.0, "stand", Triggers(clips=[c]))
     out = None
@@ -286,14 +287,15 @@ def test_envelope_none_still_enforces():
     for _ in range(200):
         t += 0.02
         out = eng.evaluate(t, "stand")
-    # enforced (scaled below the raw 1.0), not passed through.
-    assert out.head_command_offsets[HEAD_YAW] < 0.3
+    # enforced (deflection-clamped then combined-budget-scaled), not raw 2.0.
+    assert out.head_command_offsets[HEAD_YAW] == pytest.approx(COMBINED_L2_BUDGET * 1.5, abs=1e-3)
+    assert out.head_command_offsets[HEAD_YAW] < 2.0
 
 
 def test_envelope_on_applies_combined_budget():
     """Explicit DEFAULT_ENVELOPE matches the default behaviour (corrected E2)."""
     from open_duck_anim.envelope import DEFAULT_ENVELOPE
-    c = const_head_clip(1.0, loop_mode="wrap", blend_in_s=0.0)
+    c = const_head_clip(2.0, loop_mode="wrap", blend_in_s=0.0)
     eng = Engine(head_envelope=DEFAULT_ENVELOPE)
     eng.evaluate(0.0, "stand", Triggers(clips=[c]))
     # allow slew to settle: step every CTRL_DT for enough ticks
@@ -302,7 +304,7 @@ def test_envelope_on_applies_combined_budget():
     for _ in range(200):
         t += 0.02
         out = eng.evaluate(t, "stand")
-    assert out.head_command_offsets[HEAD_YAW] == pytest.approx(COMBINED_L2_BUDGET * 0.29, abs=1e-3)
+    assert out.head_command_offsets[HEAD_YAW] == pytest.approx(COMBINED_L2_BUDGET * 1.5, abs=1e-3)
 
 
 def test_envelope_slew_guard_limits_first_tick():

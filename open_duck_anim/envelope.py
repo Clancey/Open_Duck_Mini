@@ -23,11 +23,27 @@ duplicate, the other limiters:
   guard here is on the animation *command*, which is a distinct concern (limiting
   the command does not by itself constrain the policy's own output — plan §6.4).
 
-WHY THESE NUMBERS ARE NOT PHYSICAL CONSTANTS.  Every value below is an
-**empirical** property of the *current* ``BEST_WALK_ONNX_2.onnx`` checkpoint in
-additive mode. They MUST be re-derived after the Phase 5 retrain (which is
-expected to remove the additive path entirely). See the measurement provenance
-on each constant.
+WHY THESE NUMBERS ARE NOT PHYSICAL CONSTANTS — AND ARE POLICY-SPECIFIC.
+Every value below is an **empirical** property of ONE specific policy checkpoint,
+measured in additive mode. They are valid **only** for a policy trained with the
+head passthrough active during training (``motor_targets[5:9] = command[3:7] +
+motor_targets[5:9]``, mirroring the deployed runtime at
+``v2_rl_walk_mujoco.py:310-311``), which is what let the legs learn to balance
+while the head is driven through its full command range. The values here were
+re-derived on 2026-09-02 against ``passthrough_final_300M.onnx`` (Phase 5
+iteration 3; 300M steps; branch ``feature/head-passthrough-training`` @
+``08536e1``; eval reward 254.1). See the per-constant provenance below.
+
+**DO NOT apply these numbers to a differently-trained policy.** They are much
+wider than the envelope measured against the old ``BEST_WALK_ONNX_2.onnx`` policy
+(which had never had its head driven during training and toppled at small head
+deflections). If the deployed checkpoint changes — a retrain, a different reward,
+a different head-drive wiring, or a revert to a non-passthrough policy — these
+limits are INVALID and MUST be re-derived with ``envelope_sweep.py`` against the
+new checkpoint before any authored head motion is driven on hardware. The
+checkpoint each constant was measured against is named in its provenance; if the
+shipping policy is not that checkpoint (or a re-measured successor), treat the
+envelope as unverified.
 
 STABILITY CRITERION used to derive the limits ("stably upright with margin"):
 peak base tilt ≤ 8.6° (0.15 rad, the plan's Phase 4 hardware-acceptance bound),
@@ -65,29 +81,40 @@ SAFETY_FRACTION: float = 0.5
 # ---------------------------------------------------------------------------
 # Per-channel safe deflection limits (rad), as (low, high) offsets from nominal.
 # ---------------------------------------------------------------------------
-# EMPIRICAL. Measured 2026-09-01 by experiments/animation/envelope_sweep.py
-# (additive mode, BEST_WALK_ONNX_2.onnx, conditions stand AND walk; single
-# genuinely-fine outward sweep at 0.01 rad resolution, 0.5 s ramp + 5 s hold,
-# first-onset rule). Value = SAFETY_FRACTION * failure_onset, taken as the most
-# conservative (closest-to-zero) across both conditions.
-# Gates defect D13 / risk R16 (plan §3.4, §6.5, §7 Phase 4). RE-DERIVE after the
-# Phase 5 retrain — these describe the current checkpoint only.
+# EMPIRICAL — POLICY-SPECIFIC. Measured 2026-09-02 by
+# experiments/animation/envelope_sweep.py against passthrough_final_300M.onnx
+# (Phase 5 iteration 3: head passthrough active during training; 300M steps;
+# branch feature/head-passthrough-training @ 08536e1; eval reward 254.1),
+# additive mode, conditions stand AND walk, single genuinely-fine outward sweep
+# at 0.01 rad resolution, 0.5 s ramp + 5 s hold, first-onset rule. Value =
+# SAFETY_FRACTION * failure_onset (or the full training-range edge where no
+# topple occurs on that side), taken as the most conservative (closest-to-zero)
+# across both conditions. Gates defect D13 / risk R16 (plan §3.4, §6.5, §7).
 #
-#   channel      failure onset (stand / walk)          safe limit (=0.5*onset)
-#   neck_pitch   +0.62 / +0.64 ;  none / -0.32          (-0.16, +0.31)
+# VALID ONLY for a policy trained with the head passthrough active (see module
+# docstring). These are MUCH wider than the old BEST_WALK_ONNX_2.onnx envelope
+# — the retrained legs balance while the head is driven — and MUST be re-derived
+# if the deployed checkpoint changes.
+#
+#   channel      failure onset (stand / walk)          safe limit
+#   neck_pitch   none / +0.71 ;   none / none          (-0.34, +0.355)
 #   head_pitch   none / none  ;   none / none           (-0.78, +0.78) full range
-#   head_yaw     none / none  ;   -0.58 / -0.74         (-0.29, +1.50)
+#   head_yaw     none / none  ;   none / none           (-1.50, +1.50) full range
 #   head_roll    none / none  ;   none / none           (-0.50, +0.50) full range
 #
 # "none" == no topple anywhere on that side within the trained command range, so
 # the safe limit there is the full training-range edge (transform.py TRAINING_*).
-# Reproduce (2026-09-01, additive mode):
-#   envelope_sweep.py --experiment static --condition both \
-#     --fine-step 0.01 --ramp-s 0.5 --hold-s 5.0
+# The only remaining binding constraint is neck_pitch positive under walk
+# (onset +0.71 -> safe +0.355); every other channel is safe to its full trained
+# range in both conditions. The cases that toppled the OLD policy now survive the
+# full range: head_yaw -0.58 walking, neck_pitch +0.62 standing.
+# Reproduce (2026-09-02, additive mode, passthrough_final_300M.onnx):
+#   envelope_sweep.py --onnx passthrough_final_300M.onnx \
+#     --experiment static --condition both --fine-step 0.01 --ramp-s 0.5 --hold-s 5.0
 DEFLECTION_LIMITS: Dict[str, Tuple[float, float]] = {
-    "neck_pitch": (-0.16, 0.31),
+    "neck_pitch": (-0.34, 0.355),
     "head_pitch": (-0.78, 0.78),
-    "head_yaw": (-0.29, 1.50),
+    "head_yaw": (-1.50, 1.50),
     "head_roll": (-0.50, 0.50),
 }
 
@@ -111,62 +138,67 @@ DEFLECTION_HIGH.setflags(write=False)
 # primary balance protection. We adopt the platform motor limit 5.24 rad/s
 # (joystick.py:49-60, plan §6.4 / Appendix C) so the head command can never
 # demand a rate faster than the actuator bus can honour, with wide measured
-# margin. RE-DERIVE after the Phase 5 retrain. (Measured 2026-09-01.)
-# Reproduce (2026-09-01, additive mode; confirms no single-axis step below the
-# adopted 5.24 rad/s destabilises, so the platform limit binds first):
-#   envelope_sweep.py --experiment static,slew --condition both \
+# margin. POLICY-SPECIFIC: re-derive if the deployed checkpoint changes.
+# (Measured 2026-09-02 against passthrough_final_300M.onnx.)
+# Reproduce (2026-09-02, additive mode, passthrough_final_300M.onnx; confirms no
+# single-axis step below the adopted 5.24 rad/s destabilises, so the platform
+# limit binds first):
+#   envelope_sweep.py --onnx passthrough_final_300M.onnx \
+#     --experiment static,slew --condition both \
 #     --slew-rates 0.5 1.0 2.0 4.0 8.0 16.0 30.0 --slew-hold-s 5.0
 SLEW_LIMIT: float = 5.24  # rad/s
 
 # ---------------------------------------------------------------------------
 # Combined multi-axis L2 budget (dimensionless, in per-axis-normalised units).
 # ---------------------------------------------------------------------------
-# EMPIRICAL. Driving several head channels *simultaneously* — the realistic
-# animation case ("a head turn is rarely one axis") — exposes phase- and
-# frequency-dependent resonances that the per-axis static limits miss: a
-# neck_pitch+head_yaw quadrature oscillation, each within its own per-axis safe
-# limit, and the all-four-axis case topple / breach the tilt bound at total
-# amplitudes below the per-axis sum. A command is scored as n_i = c_i / L_i,
-# where L_i = min(|safe_low_i|, |safe_high_i|) is the magnitude of the TIGHTER
-# (more dangerous) side of each channel. Enforcement uses this SAME normaliser
-# (HeadEnvelope._L, envelope.py) as the measurement (_safe_mag_vec in
-# envelope_sweep.py) — they must not diverge, or the scalar below is applied
-# against looser denominators than it was calibrated with and becomes strictly
-# more permissive than anything measured (reviewer E2).
-# The budget is calibrated against the ENFORCED path, not the derivation grid.
-# Two methods were compared, and they DISAGREE — importantly:
+# EMPIRICAL — POLICY-SPECIFIC. Driving several head channels *simultaneously* —
+# the realistic animation case ("a head turn is rarely one axis") — can expose
+# phase- and frequency-dependent resonances that the per-axis static limits miss.
+# A command is scored as n_i = c_i / L_i, where L_i = min(|safe_low_i|,
+# |safe_high_i|) is the magnitude of the TIGHTER (more dangerous) side of each
+# channel. Enforcement uses this SAME normaliser (HeadEnvelope._L, envelope.py)
+# as the measurement (_safe_mag_vec in envelope_sweep.py) — they must not
+# diverge, or the scalar below is applied against looser denominators than it was
+# calibrated with and becomes strictly more permissive than anything measured
+# (reviewer E2).
+#
+# Re-derived 2026-09-02 against passthrough_final_300M.onnx (head passthrough
+# active during training; 300M steps; feature/head-passthrough-training @
+# 08536e1). With the retrained legs the coupled multi-axis case is far more
+# tolerant than the old policy, but two methods DISAGREE and the enforced path
+# governs:
 #   * The open-loop derivation (experiment_combined: smooth, equal-amplitude
-#     sinusoids distributed evenly in normalised space, first-onset rule) reports
-#     STAND tolerates up to ||n||_2 = 0.65 (worst 8.36 deg; 0.70 breaches at
-#     9.84 deg) and WALK is looser.
+#     sinusoids distributed evenly in normalised space) shows NO onset anywhere
+#     on the grid {0.4,0.5,0.6,0.7,0.8,1.0} in EITHER condition; the all-four-axis
+#     worst-case tilt is 7.80 deg (stand) / 7.94 deg (walk) at ||n||_2 = 1.0. Taken
+#     alone this would suggest a budget of ~1.0. It is only a lower bound on the
+#     true onset (the grid was not extended past 1.0) and, crucially, it drives
+#     SMOOTH sinusoids that the per-channel clamp never has to saturate.
 #   * The closed-loop adversarial validation (experiment_validate: raw commands at
 #     1.5x the training range driven tick-by-tick through THIS module's clamp,
-#     every phase combo over {0, pi/2, pi, -pi/2}, freqs 0.5-2.0 Hz, 6 s each)
-#     is HARSHER, because the per-channel clamp turns a saturating command into a
+#     every phase combo over {0, pi/2, pi, -pi/2}, freqs 0.5-2.0 Hz, 6 s each) is
+#     HARSHER, because the per-channel clamp turns a saturating command into a
 #     clipped, asymmetric waveform richer in destabilising harmonics than the
-#     smooth derivation sinusoid. Through the enforced clamp, STAND worst-case
-#     tilt is 7.44 deg at B=0.50, 7.63 deg at B=0.55, but jumps to 8.75 deg at
-#     B=0.60 (a 0.5 Hz resonance, phases [pi,-pi/2,pi,-pi/2]) — OVER the 8.6 deg
-#     Phase 4 acceptance bound. WALK stays within margin at B=0.60 (<=8.26 deg).
+#     smooth derivation sinusoid. Governing (max of stand/walk) enforced worst-case
+#     tilt by budget: 0.50 -> 6.54 deg, 0.60 -> 7.18 deg, 0.70 -> 7.85 deg,
+#     0.80 -> 8.82 deg (OVER the 8.6 deg Phase 4 bound), 1.00 -> 10.87 deg.
 # Because enforcement is what ships, the enforced-path number governs. We adopt
-# the largest budget that keeps the adversarial enforced path within the 8.6 deg
-# bound with margin on the governing STAND condition: 0.55 (7.63 deg, ~1 deg
-# margin; 0.60 is rejected). This is strictly tighter than the derivation would
-# allow and costs ~8% single-axis range vs 0.60 (e.g. head_yaw cap 0.55*0.29 =
-# 0.16 rad vs 0.174). A command is scored as n_i = c_i / L_i, where
-# L_i = min(|safe_low_i|, |safe_high_i|) is the magnitude of the TIGHTER (more
-# dangerous) side of each channel. Enforcement uses this SAME normaliser
-# (HeadEnvelope._L) as the measurement (_safe_mag_vec in envelope_sweep.py) —
-# they must not diverge, or the scalar below is applied against looser
-# denominators than it was calibrated with and becomes strictly more permissive
-# than anything measured (reviewer E2). RE-DERIVE after the Phase 5 retrain.
-# Reproduce (2026-09-01, additive mode) — derivation grid and adversarial check:
-#   envelope_sweep.py --experiment static,combined,validate --condition both \
-#     --combined-l2-grid 0.55 0.6 0.65 0.7 --combined-phases 0 1.5708 3.1416 -1.5708 \
+# 0.70: the largest budget whose adversarial enforced worst-case stays under the
+# 8.6 deg bound with margin (7.85 deg, ~0.75 deg margin; 0.80 is rejected). This
+# is strictly tighter than the open-loop derivation would allow (reviewer E2's
+# lesson: trust the enforced path, not the smooth grid). It independently matches
+# the budget the peak_279M checkpoint yielded, and is still 1.27x the old policy's
+# 0.55 — the constraint on coupled multi-axis head motion relaxes ~22%.
+# Reproduce (2026-09-02, additive mode, passthrough_final_300M.onnx) —
+# derivation grid and the governing adversarial check:
+#   envelope_sweep.py --onnx passthrough_final_300M.onnx \
+#     --experiment static,combined,validate --condition both \
+#     --combined-l2-grid 0.4 0.5 0.6 0.7 0.8 1.0 \
+#     --combined-phases 0 1.5708 3.1416 -1.5708 \
 #     --combined-freqs 0.5 1.0 1.5 2.0 --combined-osc-dur-s 6.0 --hold-s 5.0
-# The adopted 0.55 is the largest budget whose experiment_validate STAND worst
-# tilt stays <= 8.6 deg (see files/envelope/revalidation_e2corrected/).
-COMBINED_L2_BUDGET: float = 0.55
+# The adopted 0.70 is the largest budget whose experiment_validate worst-case
+# tilt stays <= 8.6 deg in BOTH conditions (files/envelope/revalidation_iter3/).
+COMBINED_L2_BUDGET: float = 0.70
 
 # Recommended ADDITIONAL derating for first hardware trials (multiplies the
 # deflection limits and the combined budget). Sim is not reality: contact,
@@ -175,10 +207,18 @@ COMBINED_L2_BUDGET: float = 0.55
 # at 30, so the head servo tracks with lag and undershoots the command — real
 # head motion transmits *less* destabilising torque than sim at the same command
 # (cuts toward safety), but the lag also shifts phase and could excite different
-# modes. Net: start at half and relax only as on-hardware data accrues (plan
-# §7 Phase 4 acceptance: zero falls over 10 one-minute trials at max authored
-# deflection/slew). This is advisory; :func:`clamp_head_envelope` does NOT apply
-# it automatically (pass a derated :class:`HeadEnvelope`).
+# modes. KEPT AT 0.5 despite the wider iteration-3 envelope: the envelope is now
+# far more trustworthy (the policy was trained with the head passthrough active,
+# so the legs actually learned to balance under head motion, and the cases that
+# toppled the old policy now survive the full range), but this is still the FIRST
+# time this head range is driven on physical hardware and sim is still not
+# reality — first-on-hardware caution is unchanged in kind even though the
+# sim-side envelope grew. Widening the envelope AND relaxing the derating at the
+# same time would compound two sources of optimism; hold the derating and relax
+# only as on-hardware data accrues (plan §7 Phase 4 acceptance: zero falls over
+# 10 one-minute trials at max authored deflection/slew). This is advisory;
+# :func:`clamp_head_envelope` does NOT apply it automatically (pass a derated
+# :class:`HeadEnvelope`).
 HARDWARE_DERATING: float = 0.5
 
 ArrayLike = Union[np.ndarray, Sequence[float]]

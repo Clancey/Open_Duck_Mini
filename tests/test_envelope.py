@@ -71,21 +71,24 @@ def test_enforcement_normaliser_matches_harness_oracle():
     """DEFAULT_ENVELOPE._L must equal the harness dangerous-side normaliser."""
     oracle = _safe_mag_vec(DEFAULT_ENVELOPE.low, DEFAULT_ENVELOPE.high)
     assert np.allclose(DEFAULT_ENVELOPE._L, oracle)
-    # And it is the *tighter* side, not the commanded side, for the asymmetric
-    # channels: neck_pitch (0.16, not 0.31) and head_yaw (0.29, not 1.50).
-    assert DEFAULT_ENVELOPE._L[0] == pytest.approx(0.16)
-    assert DEFAULT_ENVELOPE._L[2] == pytest.approx(0.29)
+    # It is the *tighter* side: for neck_pitch the negative side (0.34, not the
+    # +0.355 commanded side). head_yaw is symmetric at 1.50 after the retrain.
+    assert DEFAULT_ENVELOPE._L[0] == pytest.approx(0.34)
+    assert DEFAULT_ENVELOPE._L[2] == pytest.approx(1.50)
 
 
 def test_enforcement_scale_matches_measured_budget_not_commanded_side():
-    """A vector the OLD commanded-side rule allowed must now be scaled down.
+    """A multi-axis vector over the L2 budget must be scaled back to the budget
+    using the dangerous-side normaliser (reviewer E2).
 
-    Reviewer E2 reproduction: [0.093, 0.234, 0.450, 0.150] has ||c/L_min||2 =
-    1.71 (3.1x the 0.55 measured budget) but only ~0.6 under the commanded-side
-    normaliser. The corrected enforcement must pull it back to the budget.
+    [0.2, 0.5, 1.0, 0.3] is within every per-channel deflection limit
+    (iteration-3: [+-0.34/0.355, +-0.78, +-1.50, +-0.50]) yet ||c/L_min||2 =
+    1.25 > the 0.70 budget, so the combined guard — using L = min(|low|, high) —
+    must pull it back to exactly the budget.
     """
-    c = np.array([0.093, 0.234, 0.450, 0.150])
-    assert _combined_norm(DEFAULT_ENVELOPE, c) > 1.5  # far over budget
+    c = np.array([0.2, 0.5, 1.0, 0.3])
+    assert _combined_norm(DEFAULT_ENVELOPE, c) > COMBINED_L2_BUDGET  # over budget
+    assert np.all(c <= DEFLECTION_HIGH + 1e-12)  # each channel individually legal
     out = clamp_head_envelope(c)
     assert _combined_norm(DEFAULT_ENVELOPE, out) == pytest.approx(
         COMBINED_L2_BUDGET, abs=1e-9
@@ -126,20 +129,21 @@ def test_beyond_limit_never_exceeds_any_channel():
 
 
 def test_asymmetric_dangerous_side_bounds():
-    """neck_pitch and head_yaw have a much tighter negative side; clamping to
-    the dangerous side must use that tighter magnitude (E11)."""
+    """neck_pitch has a tighter negative side (iteration-3): +0.355 vs -0.34, so
+    clamping must use each side's own magnitude (E11). head_yaw is now symmetric
+    at full range (negative side unlocked by the passthrough retrain)."""
     e = _unconstrained()
-    # neck_pitch: +0.31 allowed, -0.16 is the dangerous side.
-    assert e.clamp(_single_axis(0, 5.0))[0] == pytest.approx(0.31)
-    assert e.clamp(_single_axis(0, -5.0))[0] == pytest.approx(-0.16)
-    # head_yaw: +1.50 allowed, -0.29 dangerous.
+    # neck_pitch: +0.355 allowed, -0.34 is the (slightly) tighter dangerous side.
+    assert e.clamp(_single_axis(0, 5.0))[0] == pytest.approx(0.355)
+    assert e.clamp(_single_axis(0, -5.0))[0] == pytest.approx(-0.34)
+    # head_yaw: symmetric +-1.50.
     assert e.clamp(_single_axis(2, 5.0))[2] == pytest.approx(1.50)
-    assert e.clamp(_single_axis(2, -5.0))[2] == pytest.approx(-0.29)
+    assert e.clamp(_single_axis(2, -5.0))[2] == pytest.approx(-1.50)
 
 
 # --- slew limiting (applied LAST — E4) -------------------------------------
 def test_slew_caps_step_at_dt():
-    """head_pitch 0->0.31 is within its L2 budget (0.31/0.78=0.40<0.6) so only
+    """head_pitch 0->0.31 is within its L2 budget (0.31/0.78=0.40<0.70) so only
     the slew guard binds: the step is capped at slew_limit*dt."""
     dt = 0.02
     prev = np.zeros(4)
@@ -199,12 +203,15 @@ def test_slew_bad_dt_raises():
 def test_combined_budget_constant_is_measured_value():
     """Pin the empirically-adopted combined budget (envelope.py provenance).
 
-    0.55 is the largest L2 budget whose adversarial ENFORCED-path validation keeps
-    STAND worst-case tilt <= the 8.6 deg Phase 4 bound (measured 2026-09-01,
-    experiments/animation/envelope_sweep.py --experiment validate; 0.60 hit
-    8.75 deg). If this changes, re-derive and update the provenance comment.
+    0.70 is the iteration-3 combined budget. The open-loop derivation grid
+    {0.4..1.0} shows no onset (which alone would suggest ~1.0), but the adversarial
+    ENFORCED-path validation against passthrough_final_300M.onnx is harsher and
+    governs: governing worst-case tilt is 7.85 deg at 0.70 but 8.82 deg at 0.80
+    (OVER the 8.6 deg Phase 4 bound), so 0.70 is the largest budget that holds with
+    margin (measured 2026-09-02, experiments/animation/envelope_sweep.py
+    --experiment validate). If this changes, re-derive and update the provenance.
     """
-    assert COMBINED_L2_BUDGET == 0.55
+    assert COMBINED_L2_BUDGET == 0.70
 
 
 def test_combined_budget_scales_down_over_budget_vector():
@@ -241,7 +248,7 @@ def test_combined_budget_in_budget_passes_unchanged():
 
 def test_combined_budget_uses_dangerous_side():
     """Per-channel clamp uses each channel's own signed limit; the negative neck
-    side (-0.16) is the tighter, dangerous one."""
+    side (-0.34) is the tighter, dangerous one."""
     neg = clamp_head_envelope(_single_axis(0, -1.0), envelope=_unconstrained())
     assert neg[0] == pytest.approx(DEFLECTION_LOW[0])
 
@@ -424,3 +431,23 @@ def test_out_buffer_written():
 def test_channels_constant():
     assert HEAD_CHANNELS == ("neck_pitch", "head_pitch", "head_yaw", "head_roll")
     assert env.DEFLECTION_LOW.shape == (4,)
+
+
+def test_deflection_constants_pinned_to_iteration3_measurement():
+    """Pin the iteration-3 measured deflection limits so an accidental edit is
+    caught. Values measured 2026-09-02 against passthrough_final_300M.onnx
+    (head-passthrough-trained policy); see envelope.py DEFLECTION_LIMITS
+    provenance. These are POLICY-SPECIFIC — if the deployed checkpoint changes
+    they must be re-derived, and this test updated deliberately.
+    """
+    assert env.DEFLECTION_LIMITS == {
+        "neck_pitch": (-0.34, 0.355),
+        "head_pitch": (-0.78, 0.78),
+        "head_yaw": (-1.50, 1.50),
+        "head_roll": (-0.50, 0.50),
+    }
+    assert np.allclose(DEFLECTION_LOW, [-0.34, -0.78, -1.50, -0.50])
+    assert np.allclose(DEFLECTION_HIGH, [0.355, 0.78, 1.50, 0.50])
+    assert COMBINED_L2_BUDGET == 0.70
+    assert SLEW_LIMIT == 5.24
+    assert HARDWARE_DERATING == 0.5

@@ -34,17 +34,17 @@ def test_pose_to_command_additive():
 
 def test_pose_to_command_enforces_envelope_by_default():
     # SAFETY DEFAULT (reviewer E3): pose_to_command routes through the D13
-    # envelope unless unbounded() is passed. A head_yaw command of 0.35 is within
-    # the training range (+1.5) but over the combined budget (0.35/0.29=1.2>0.55),
+    # envelope unless unbounded() is passed. This multi-axis command is within
+    # the (wide, iteration-3) training ranges but over the combined L2 budget,
     # so the default enforces it down.
-    pose = np.array([0.1, 0.0, 0.2, 0.0])
-    base = np.array([0.0, 0.0, 0.1, 0.0])
-    joy = np.array([0.0, 0.0, 0.05, 0.0])
-    cmd = tf.pose_to_command(pose, base_command=base, joystick_offset=joy)
-    # command=[0.1,0,0.35,0]; ||c/L||2=sqrt((0.1/0.16)^2+(0.35/0.29)^2)=1.359>0.55
-    # → uniform scale 0.55/1.359=0.4047 → head_yaw 0.35*0.4047 = 0.1416.
-    assert cmd[2] == pytest.approx(0.35 * COMBINED_L2_BUDGET / 1.359, abs=1e-3)
-    assert abs(cmd[2]) < 0.35  # strictly tighter than the raw training clamp
+    pose = np.array([0.3, 0.0, 1.4, 0.0])
+    cmd = tf.pose_to_command(pose)
+    # command=[0.3,0,1.4,0]; L=min(|low|,high)=[0.34,0.78,1.5,0.5]
+    # ||c/L||2 = sqrt((0.3/0.34)^2+(1.4/1.5)^2)=1.284 > 1.0 (=COMBINED_L2_BUDGET)
+    # → uniform scale COMBINED_L2_BUDGET/1.284 → head_yaw 1.4*scale.
+    norm = np.sqrt((0.3 / 0.34) ** 2 + (1.4 / 1.5) ** 2)
+    assert cmd[2] == pytest.approx(1.4 * COMBINED_L2_BUDGET / norm, abs=1e-3)
+    assert abs(cmd[2]) < 1.4  # strictly tighter than the raw training clamp
 
 
 def test_clamp_at_training_boundaries():
@@ -69,13 +69,13 @@ def test_within_range_unchanged():
 
 
 def test_pose_to_command_clamps():
-    # neck_pitch huge → training clamp (+1.1) THEN envelope (+0.31 high side).
+    # neck_pitch huge → training clamp (+1.1) THEN envelope (+0.355 high side).
     pose = np.array([2.0, 0.0, 0.0, 0.0])  # neck_pitch huge
     cmd = tf.pose_to_command(pose)
-    # training clamp → 1.1, then envelope: neck clamps to +0.31 then the lone-axis
-    # L2 budget scales it to COMBINED_L2_BUDGET*L_neck = 0.55*0.16 = 0.088.
-    assert cmd[0] == pytest.approx(COMBINED_L2_BUDGET * 0.16, abs=1e-6)
-    assert cmd[0] < 0.31  # far below the unsafe 1.1 training max
+    # training clamp → 1.1, then envelope: neck clamps to +0.355; the lone-axis
+    # norm 0.355/0.34 = 1.044 > 1.0 → scaled to COMBINED_L2_BUDGET*L_neck = 1.0*0.34.
+    assert cmd[0] == pytest.approx(COMBINED_L2_BUDGET * 0.34, abs=1e-6)
+    assert cmd[0] < 0.355  # far below the unsafe 1.1 training max
     # with the envelope disabled it falls back to the raw training clamp.
     raw = tf.pose_to_command(pose, head_envelope=HeadEnvelope.unbounded())
     assert raw[0] == pytest.approx(1.1)
