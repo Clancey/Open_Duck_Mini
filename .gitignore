@@ -2,6 +2,12 @@ __pycache__/
 gym/logs/*
 *.pkl
 mini_bdx/mini_bdx.egg-info/*
+# open_duck_anim build artifacts (plan Phase 1 packaging)
+open_duck_anim.egg-info/
+packaging/open_duck_anim/open_duck_anim.egg-info/
+packaging/open_duck_anim/build/
+packaging/open_duck_anim/dist/
+.pytest_cache/
 experiments/RL/data/*
 experiments/RL/new/logs/
 experiments/RL/new/sac/

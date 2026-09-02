@@ -1,0 +1,48 @@
+# Standalone packaging for the ``open_duck_anim`` package (plan Phase 1).
+#
+# This project is intentionally kept SEPARATE from the repository-root
+# ``setup.cfg`` / ``pyproject.toml`` that build the pre-existing ``mini-bdx``
+# distribution, rather than adding a ``[project]`` table to the root config.
+# (For the record: setuptools does NOT hard-reject a field defined in both the
+# root ``setup.cfg`` and a root ``pyproject.toml`` — it emits
+# ``SetuptoolsWarning: '<field>' overwritten in pyproject.toml`` and merges. The
+# real problem with building from the root is that the root
+# ``[options] package_dir = =mini_bdx`` leaks in, so a find would look for
+# ``mini_bdx/open_duck_anim`` and produce an empty distribution. Keeping this a
+# self-contained project avoids that entirely.)
+#
+# This project is SELF-CONTAINED: the package source is made available here via
+# a symlink ``open_duck_anim -> ../../open_duck_anim``. setuptools copies through
+# symlinks, so both wheel and sdist builds capture the real ``.py`` files inside
+# the build/staging tree. Do NOT point ``package-dir``/``packages.find`` outside
+# this directory (e.g. ``../..``): sdist staging cannot resolve ``..`` and would
+# silently produce a tarball with NO Python source — a ``pip install`` that
+# succeeds but leaves ``import open_duck_anim`` raising ``ModuleNotFoundError``.
+#
+# Install (from anywhere):
+#     pip install ./packaging/open_duck_anim            # runtime: numpy only
+#     pip install "./packaging/open_duck_anim[dev]"     # + pytest for tests
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-duck-anim"
+version = "0.1.0"
+description = "Numpy-only robot animation blending engine for Open Duck Mini v2 (Phase 1)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.4.4",
+]
+
+[tool.setuptools.packages.find]
+# Default package-dir (this directory). ``open_duck_anim`` is a symlink to the
+# real package at the repository root; setuptools follows it into the build.
+include = ["open_duck_anim*"]

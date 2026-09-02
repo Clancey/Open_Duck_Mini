@@ -1,0 +1,107 @@
+{
+  "compiled_sha256": "d14d2b884de62bfbff114f4773dba5c289dc4147ea56e54dcfde852f4934f7fd",
+  "description": "Golden vectors for open_duck_anim Phase 1 (plan \u00a77). Cross-platform numerical-compat check within tol.",
+  "samples": [
+    {
+      "antenna_l": 0.0,
+      "antenna_r": 0.0,
+      "head": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "t": 0.0
+    },
+    {
+      "antenna_l": 0.10416666666666666,
+      "antenna_r": -0.10416666666666666,
+      "head": [
+        0.0,
+        0.0,
+        0.026041666666666664,
+        0.0
+      ],
+      "t": 0.05
+    },
+    {
+      "antenna_l": 0.20833333333333334,
+      "antenna_r": -0.20833333333333334,
+      "head": [
+        0.0,
+        0.0,
+        0.10416666666666667,
+        0.0
+      ],
+      "t": 0.1
+    },
+    {
+      "antenna_l": 0.4166666666666667,
+      "antenna_r": -0.4166666666666667,
+      "head": [
+        0.0,
+        0.0,
+        0.20833333333333334,
+        0.0
+      ],
+      "t": 0.2
+    },
+    {
+      "antenna_l": 0.625,
+      "antenna_r": -0.625,
+      "head": [
+        0.0,
+        0.0,
+        0.3125,
+        0.0
+      ],
+      "t": 0.3
+    },
+    {
+      "antenna_l": 0.9375,
+      "antenna_r": -0.9375,
+      "head": [
+        0.0,
+        0.0,
+        0.46875,
+        0.0
+      ],
+      "t": 0.45
+    },
+    {
+      "antenna_l": 0.0,
+      "antenna_r": 0.0,
+      "head": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "t": 0.5
+    },
+    {
+      "antenna_l": 0.20833333333333334,
+      "antenna_r": -0.20833333333333334,
+      "head": [
+        0.0,
+        0.0,
+        0.10416666666666667,
+        0.0
+      ],
+      "t": 0.6
+    }
+  ],
+  "scenario": {
+    "antenna_end_rad": 0.6,
+    "blend_in_s": 0.1,
+    "blend_out_s": 0.1,
+    "fps": 50,
+    "head_yaw_end": 0.5,
+    "loop_mode": "wrap",
+    "n_frames": 25,
+    "show_blend_in_s": 0.05,
+    "show_blend_out_s": 0.05
+  },
+  "source_sha256": "c563181398f5680244427ad01a7060bd46c906011130a3acb47aba956dd0d5b0",
+  "tolerance": 1e-06
+}

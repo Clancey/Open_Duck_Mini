@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-open-duck-anim:
+    name: open_duck_anim tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install open_duck_anim with dev extras
+        run: python -m pip install --upgrade pip && pip install "./packaging/open_duck_anim[dev]"
+
+      - name: Run pytest
+        run: pytest tests/ -q
+
+      # M5: exercise the INSTALLED artifact, not the working tree. tests/conftest.py
+      # inserts the repo root on sys.path, so pytest imports from the checkout even
+      # when the package is broken in site-packages (this is what made C3 invisible
+      # to CI). Import from a directory OUTSIDE the repo to prove the installed
+      # package resolves from site-packages.
+      - name: Import installed package from outside the repo
+        run: |
+          cd "$RUNNER_TEMP"
+          python -c "import open_duck_anim; print('installed at', open_duck_anim.__file__)"
+          python -c "import open_duck_anim; assert 'site-packages' in open_duck_anim.__file__, open_duck_anim.__file__"
+
+      # M5 + C3: build the sdist and install THAT into a clean venv outside the
+      # repo, then import it. A silent empty-sdist (the C3 failure) fails here.
+      - name: Build sdist, install in a clean venv outside the repo, import
+        run: |
+          python -m pip install --upgrade build
+          python -m build --sdist ./packaging/open_duck_anim --outdir "$RUNNER_TEMP/dist"
+          echo "=== sdist contents ==="
+          tar tzf "$RUNNER_TEMP"/dist/*.tar.gz | grep '\.py$'
+          tar tzf "$RUNNER_TEMP"/dist/*.tar.gz | grep -q 'open_duck_anim/blend.py' \
+            || (echo "ERROR: sdist is missing Python source" && exit 1)
+          python -m venv "$RUNNER_TEMP/sdist-venv"
+          "$RUNNER_TEMP/sdist-venv/bin/pip" install "$RUNNER_TEMP"/dist/*.tar.gz
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/sdist-venv/bin/python" -c "import open_duck_anim; print('sdist import OK from', open_duck_anim.__file__)"
+
+      # Prove the Pi deployment path: the package must import with ONLY numpy.
+      - name: Confirm numpy-only import (no dev extras)
+        run: |
+          python -m venv "$RUNNER_TEMP/runtime-venv"
+          "$RUNNER_TEMP/runtime-venv/bin/pip" install "./packaging/open_duck_anim"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/runtime-venv/bin/python" -c "import open_duck_anim; print('numpy-only import OK')"
