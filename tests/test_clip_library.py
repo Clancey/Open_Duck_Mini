@@ -68,11 +68,21 @@ def test_clip_schema_valid(path):
 
 @pytest.mark.parametrize("path", CLIP_PATHS, ids=[_clip_id(p) for p in CLIP_PATHS])
 def test_clip_is_head_masked(path):
-    """Head-only: mask is ``head`` and every leg joint is held constant."""
+    """Head-only: mask is ``head`` and every leg joint is held constant.
+
+    Dock-only full-body clips (``layer_mask="full_body"``, ``requires_mode=
+    "dock"``) deliberately animate the legs and are the ONE exception to the
+    head-mask rule; they are covered separately by ``test_dock_fullbody.py``
+    (compile/runtime gating, leg clamping, rate limiting, safe mode transitions).
+    Skip them here rather than weakening the guarantee for every other clip.
+    """
     clip = load_clip(path)
-    assert clip.layer_mask == "head", (
-        "%s is not head-masked (mask=%r)" % (clip.name, clip.layer_mask)
-    )
+    if clip.layer_mask != "head":
+        assert clip.layer_mask == "full_body" and clip.requires_mode == "dock", (
+            "%s is neither head-masked nor a dock full-body clip (mask=%r, "
+            "requires_mode=%r)" % (clip.name, clip.layer_mask, clip.requires_mode)
+        )
+        pytest.skip("dock full-body clip: leg motion covered by test_dock_fullbody.py")
     leg = clip.joints[:, _LEG_IDX]
     leg_ptp = float(np.max(np.ptp(leg, axis=0))) if len(leg) else 0.0
     assert leg_ptp <= _LEG_HOLD_TOL_RAD, (

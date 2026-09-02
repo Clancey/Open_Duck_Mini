@@ -41,9 +41,11 @@ import math
 import numpy as np
 
 from .clip import DuckAnimClip, DiscreteEvent
-from .joint_order import HW_ORDER_14, HEAD_SLICE_16, INIT_POS_14
+from .joint_order import HW_ORDER_14, HEAD_SLICE_16, INIT_POS_14, LEG_INDICES_16
 from .transform import TRAINING_LOW, TRAINING_HIGH, NOMINAL_HEAD_POSE
 from .envelope import HeadEnvelope, DEFAULT_ENVELOPE
+from .leg_envelope import LegDockEnvelope, DERATED_LEG_ENVELOPE
+from .limits import JointRateLimiter, MAX_MOTOR_VELOCITY
 
 # Timing constants (plan §6.6).
 CTRL_DT = 0.02       # 50 Hz single clock
@@ -232,6 +234,19 @@ class _ClipState:
         h1 = j[i1, HEAD_SLICE_16]
         return h0 * (1.0 - frac) + h1 * frac
 
+    def sample_legs(self, t: float) -> np.ndarray:
+        """Sample the ten leg joints (LEG_NAMES order) at ``t`` (dock full-body).
+
+        Only meaningful for ``layer_mask == "full_body"`` clips; head-masked
+        clips carry the legs at their neutral hold, so the compositor never
+        blends their legs (they would just reproduce the hold).
+        """
+        i0, i1, frac = self._local_frame(t)
+        j = self.clip.joints
+        l0 = j[i0, LEG_INDICES_16]
+        l1 = j[i1, LEG_INDICES_16]
+        return l0 * (1.0 - frac) + l1 * frac
+
     def sample_antennas(self, t: float):
         i0, i1, frac = self._local_frame(t)
         sh = self.clip.show
@@ -300,6 +315,7 @@ class Engine:
         max_layers: int = 4,
         head_joint_limits: Optional[tuple] = None,
         head_envelope: Optional[HeadEnvelope] = None,
+        leg_envelope: Optional[LegDockEnvelope] = None,
     ) -> None:
         self.background = background
         self.max_layers = max_layers
@@ -354,6 +370,24 @@ class Engine:
         # clears on its own — the caller inspects ``head_fault`` and decides how
         # to recover (e.g. hold, e-stop) and calls ``reset()`` deliberately.
         self._head_fault: bool = False
+        # --- DOCK full-body leg path (plan §6.2 dock capability) --------------
+        # Legs are animated ONLY in DOCK_DEMO. Like the head envelope, the leg
+        # envelope is OPT-OUT and defaults to the DERATED dock envelope so a bare
+        # ``Engine()`` cannot drive the legs past the conservative first-hardware
+        # deflections. Pass an explicit ``LegDockEnvelope`` (e.g. full-rate) to
+        # override. The engine pre-clamps and pre-rate-limits the leg targets it
+        # emits; the runtime re-applies MJCF jnt_range + the 5.24 rad/s limit on
+        # the final bus as defence-in-depth.
+        self.leg_envelope = leg_envelope if leg_envelope is not None else DERATED_LEG_ENVELOPE
+        self._leg_rate = JointRateLimiter(MAX_MOTOR_VELOCITY)
+        self._prev_leg_targets: Optional[np.ndarray] = None
+        self._last_leg_t: Optional[float] = None
+        # Observability (plan §6.5): count of full-body triggers refused because
+        # the mode was not DOCK, and a latched flag set whenever an in-flight
+        # full-body clip had to be controlled-aborted by a mode transition. Both
+        # let a caller/telemetry notice that the dock-only guarantee bit.
+        self._dropped_fullbody_triggers: int = 0
+        self._fullbody_mode_aborts: int = 0
 
     @property
     def head_fault(self) -> bool:
@@ -364,6 +398,27 @@ class Engine:
         and take a deliberate recovery action rather than trusting head output.
         """
         return self._head_fault
+
+    @property
+    def dropped_fullbody_triggers(self) -> int:
+        """Count of full-body triggers refused for running outside DOCK (§6.2).
+
+        Rises whenever a ``layer_mask == "full_body"`` clip is triggered while
+        the mode is not DOCK. The engine refuses to start it (the dangerous case
+        is unplayable, not merely discouraged); a caller can watch this to notice
+        a mis-scheduled full-body clip.
+        """
+        return self._dropped_fullbody_triggers
+
+    @property
+    def fullbody_mode_aborts(self) -> int:
+        """Count of in-flight full-body clips controlled-aborted by a mode change.
+
+        Rises whenever the mode leaves DOCK while a full-body clip is playing:
+        the clip is released through the normal crossfade (never a snap) and the
+        animated leg channels stop being emitted (legs return to the policy).
+        """
+        return self._fullbody_mode_aborts
 
     def reset(self) -> None:
         """Clear stateful head-path state and the latched fault (reviewer E1).
@@ -376,6 +431,8 @@ class Engine:
         self._prev_head_offsets = None
         self._last_t = None
         self._head_fault = False
+        self._prev_leg_targets = None
+        self._last_leg_t = None
 
     # --- trigger handling -----------------------------------------------------
     def _owner(self) -> Optional[_ClipState]:
@@ -407,17 +464,37 @@ class Engine:
         while len(self._layers) > self.max_layers:
             self._layers.pop(0)
 
-    def _apply_triggers(self, triggers: Triggers, t: float) -> None:
+    def _apply_triggers(self, triggers: Triggers, t: float, mode: str) -> None:
         if triggers.cancel:
             for st in self._layers:
                 if not st.releasing:
                     st.begin_release(t)
         for clip in triggers.clips:
+            # RUNTIME capability gate (plan §6.2). A full-body clip animates the
+            # legs and is ONLY playable in DOCK. Refuse to even start it in any
+            # other mode — belt-and-braces with the compile-time validator, so a
+            # clip mis-scheduled at runtime (wrong mode) cannot move the legs of a
+            # standing/walking robot. Count the refusal for observability.
+            if clip.layer_mask == "full_body" and mode != MODE_DOCK:
+                self._dropped_fullbody_triggers += 1
+                continue
             owner = self._owner()
             if owner is None or clip.priority >= owner.clip.priority:
                 # higher wins; equal → newer wins (plan §6.4).
                 self._start_clip(clip, t)
             # lower priority: ignored (does not take ownership).
+
+        # Mode-transition-mid-clip (plan §6.2/§6.5). If the mode has left DOCK
+        # while a full-body clip is still playing, degrade SAFELY: release it
+        # through the normal crossfade (never a snap). The animated leg channels
+        # simply stop being emitted below (leg_targets is None outside DOCK, so
+        # the legs return to the policy with no engine-side step), and the head/
+        # show part fades out via the standard blend-out.
+        if mode != MODE_DOCK:
+            for st in self._layers:
+                if st.clip.layer_mask == "full_body" and not st.releasing:
+                    st.begin_release(t)
+                    self._fullbody_mode_aborts += 1
 
     # --- background sampling --------------------------------------------------
     def _sample_background(self, t: float):
@@ -454,7 +531,7 @@ class Engine:
         if triggers is None:
             triggers = Triggers()
 
-        self._apply_triggers(triggers, t_now)
+        self._apply_triggers(triggers, t_now, mode)
 
         # Layer 1: background (composited in place into the persistent buffer).
         comp_head, comp_al, comp_ar, comp_eyes = self._sample_background(t_now)
@@ -465,6 +542,14 @@ class Engine:
             fired_events.extend(self._bg_state.collect_events(t_now))
 
         # Layer 2: triggered clips composed in order (releasing first → active).
+        # DOCK-only leg accumulator: starts at the dock hold and blends in each
+        # full-body layer's legs weighted by its BODY weight (so leg motion
+        # crossfades exactly like the head, and a releasing full-body clip eases
+        # its legs back to the hold instead of snapping). Only built in DOCK;
+        # outside DOCK the legs are policy-owned and never emitted.
+        comp_legs = None
+        if mode == MODE_DOCK:
+            comp_legs = _DOCK_LEG_HOLD.copy()
         owner = self._owner()
         for st in self._layers:
             wb = st.weight_body(t_now)
@@ -475,6 +560,10 @@ class Engine:
                 comp_head *= (1.0 - wb)
                 np.multiply(ch, wb, out=self._scratch)
                 comp_head += self._scratch
+                if comp_legs is not None and st.clip.layer_mask == "full_body":
+                    cl = st.sample_legs(t_now)
+                    comp_legs *= (1.0 - wb)
+                    comp_legs += cl * wb
             if ws > 0.0:
                 cal, car = st.sample_antennas(t_now)
                 comp_al = comp_al * (1.0 - ws) + cal * ws
@@ -555,13 +644,34 @@ class Engine:
         leg_targets = None
         head_targets = None
         if mode == MODE_DOCK:
-            # DOCK_DEMO: legs held (load-relieving dock posture); head driven as
-            # DIRECT absolute joint targets. These are joint angles, so they are
-            # clamped to the PHYSICAL head joint limits (H2) — NOT the training
-            # command ranges. jnt_range clamping for the full 14-DOF bus targets
-            # is applied downstream by open_duck_anim.limits.
-            leg_targets = _DOCK_LEG_HOLD.copy()
+            # DOCK_DEMO: head driven as DIRECT absolute joint targets, clamped to
+            # PHYSICAL head joint limits (H2). Legs held at the dock hold unless a
+            # full-body clip is animating them (comp_legs), in which case the
+            # animated targets are clamped to the conservative leg dock envelope
+            # (jnt_range ∩ small deflection box: self-collision / cable-strain
+            # guard, plan §6.2) and then RATE-LIMITED at max_motor_velocity so the
+            # emitted leg targets are already spec-compliant. The runtime re-clamps
+            # + re-rate-limits the final bus as defence-in-depth.
             head_targets = np.clip(comp_head, self._head_low, self._head_high)
+            leg_raw = comp_legs if comp_legs is not None else _DOCK_LEG_HOLD
+            leg_clamped = self.leg_envelope.clamp(leg_raw)
+            # Leg velocity clamp. Seed the reference from the dock hold on the
+            # first DOCK tick / after any non-DOCK excursion (re-entering DOCK
+            # re-seeds from the hold, never from a stale target), and clamp the
+            # upper bound on dt like the head slew so a stalled loop cannot
+            # authorise an unbounded leg step.
+            if self._prev_leg_targets is None or self._last_leg_t is None or t_now <= self._last_leg_t:
+                leg_targets = leg_clamped.copy()
+            else:
+                dt_leg = min(t_now - self._last_leg_t, MAX_SLEW_DT)
+                leg_targets = self._leg_rate.limit(self._prev_leg_targets, leg_clamped, dt_leg)
+            self._prev_leg_targets = leg_targets.copy()
+            self._last_leg_t = t_now
+        else:
+            # Outside DOCK the legs are policy-owned; drop the leg reference so a
+            # later DOCK re-entry re-seeds from the hold (no cross-mode leg step).
+            self._prev_leg_targets = None
+            self._last_leg_t = None
 
         # Prune expired layers in place (M4: no per-tick list rebuild).
         i = len(self._layers) - 1

@@ -108,6 +108,20 @@ from .envelope import (
     HARDWARE_DERATING,
 )
 
+# Leg dock safety envelope (plan §6.2 dock full-body capability)
+from .leg_envelope import (
+    LegDockEnvelope,
+    DEFAULT_LEG_ENVELOPE,
+    DERATED_LEG_ENVELOPE,
+    DOCK_LEG_HOLD,
+    DOCK_LEG_MAX_DEFLECTION,
+    DOCK_LEG_DERATING,
+    LEG_JNT_LOW,
+    LEG_JNT_HIGH,
+    LEG_HW_INDICES,
+    LEG_NAMES,
+)
+
 __all__ = [
     "__version__",
     # joint_order
@@ -137,4 +151,8 @@ __all__ = [
     "HeadEnvelope", "clamp_head_envelope", "DEFAULT_ENVELOPE",
     "DEFLECTION_LIMITS", "DEFLECTION_LOW", "DEFLECTION_HIGH",
     "SLEW_LIMIT", "COMBINED_L2_BUDGET", "SAFETY_FRACTION", "HARDWARE_DERATING",
+    # leg dock envelope (§6.2)
+    "LegDockEnvelope", "DEFAULT_LEG_ENVELOPE", "DERATED_LEG_ENVELOPE",
+    "DOCK_LEG_HOLD", "DOCK_LEG_MAX_DEFLECTION", "DOCK_LEG_DERATING",
+    "LEG_JNT_LOW", "LEG_JNT_HIGH", "LEG_HW_INDICES", "LEG_NAMES",
 ]

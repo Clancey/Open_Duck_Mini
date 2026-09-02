@@ -15,7 +15,8 @@ derated — will play them without the runtime having to clamp anything.
 
 Categories: **A** idle/alive loops · **AM** emotional mood loops · **B**
 curiosity/attention · **C** expressive reactions (incl. yes/no) · **CE**
-emotional one-shot beats · **CS** scared/fear beats · **D** walk-compatible.
+emotional one-shot beats · **CS** scared/fear beats · **D** walk-compatible ·
+**E** dock-only full-body (legs move — restricted, see below).
 
 | Clip | Cat | Dur | Loop | Mode | Prio | Path | What it is / when to trigger |
 |------|:---:|----:|------|------|-----:|------|------------------------------|
@@ -58,6 +59,7 @@ emotional one-shot beats · **CS** scared/fear beats · **D** walk-compatible.
 | `calm_down` | CS | 3.4s | once | stand | 19 | blender | Calm down (**recovery**): release from fear to neutral — un-tuck, face forward, ears un-pin and relax, a flurry of relieved blinks. Trigger to **exit** fear so the emotion never looks stuck; also bridges `mood_scared` → a neutral/content mood. |
 | `walk_look_around` | D | 7.0s | wrap | walk | 5 | parametric | Gentle gaze wander to overlay **while walking**. Small, legible, seamless loop. |
 | `walk_alert` | D | 2.0s | once | walk | 15 | blender | Contained "something caught my eye" alert usable mid-stride. |
+| `dock_wiggle` | E | 3.0s | once | **dock** | 25 | dock | **Happy full-body wiggle — dock only.** Hips lead a decaying side-to-side wag, body rocks, head + antennas trail, eyes bright. The **only** clip that moves the legs. Plays **exclusively** in `DOCK_DEMO`; rejected everywhere else at compile *and* runtime. **Deliberately triggered only — never in the idle service.** |
 
 `idle_alive.duckanim` (the original reference clip, 4.0s wrap, `any`, prio 0)
 also lives here and is covered by the same tests.
@@ -339,3 +341,105 @@ by Blender's float32 round-off, ~1e-7 rad — verified with
 * **parametric** — the 59-float source is generated directly from the curve
   engine (no Blender). Used for the breathing/scan/wander **loops**, which are
   naturally expressed as detuned sines and are easier to keep seamless this way.
+
+## Dock-only full-body clips (category E) — why they are restricted
+
+Every clip above this section is **head-masked**: it drives only the head and
+antennas and holds the legs constant. That is load-bearing. The RL locomotion
+policy owns the legs whenever the robot is standing or walking, so a head-masked
+clip is safe to play in **any** mode — docked, standing, or layered over a walk.
+Animating the legs breaks that guarantee: naive additive leg motion will
+destabilise a balancing biped, and leg motion during locomotion would need
+residual RL with a bounded scale, not raw clip playback. So full-body clips are
+confined to the one place where the legs are **not** load-bearing and no policy
+is running: `DOCK_DEMO`, when the duck is docked or cradled and the dock carries
+its weight.
+
+`dock_wiggle` is the first (and, for now, only) category-E clip.
+
+**The restriction is enforced twice, by construction, not by convention:**
+
+* **Compile time** (`open_duck_anim/clip.py`). `layer_mask="full_body"` is
+  accepted **only** with `requires_mode="dock"`. A full-body clip declared
+  `any`, `stand`, or `walk` is rejected by the validator with an error naming
+  the illegal leg channels — the dangerous clip is *unauthorable*, not merely
+  discouraged.
+* **Run time** (`open_duck_anim/blend.py`). The engine's mode × channel
+  capability matrix refuses to *start* a full-body clip in any mode other than
+  `DOCK_DEMO` (the trigger is dropped and counted). If the mode leaves `DOCK`
+  **while a full-body clip is already playing**, the clip is taken through the
+  normal controlled-abort (release) path — the legs ease back toward the dock
+  hold pose and are then handed back to the policy — never a snap. The engine
+  only ever emits `leg_targets` in `DOCK`; in any other mode `leg_targets` is
+  `None` and the legs belong to the policy.
+
+### What the legs are allowed to do, and why it is safe
+
+There is no *measured* balance envelope for the legs the way there is for the
+head — because balance is not a constraint when the weight is on the dock. But
+joint limits, velocity limits, and **mechanical** safety still are, and the legs
+can reach poses the head never could. So the leg envelope
+(`open_duck_anim/leg_envelope.py`) is deliberately conservative:
+
+* **Per-joint range** is sourced from the MJCF (`open_duck_mini_v2.xml`) and the
+  motion is expressed as a bounded **deflection from the dock hold pose**, then
+  intersected with the MJCF `jnt_range`.
+* **Hip yaw and hip roll lead**; knee and ankle barely move. That is a
+  self-collision / cable-strain choice: a large knee or ankle excursion is what
+  could fold a shin or foot into the chassis or wrap a servo cable. Twisting at
+  the hips keeps the legs sweeping in a safe cone. Authored deflection caps
+  (×0.5 hardware-derated): hip yaw 0.10 rad, hip roll 0.06, hip pitch 0.05,
+  knee 0.04, ankle 0.04.
+* **×0.5 hardware derating**, the same convention the head envelope uses for
+  first-hardware trials, so the runtime clamp is a no-op on a derated first run.
+* The `max_motor_velocity = 5.24 rad/s` bus-target rate limit is applied to the
+  final leg targets exactly as it is to the head.
+* The **head channels of a full-body clip still respect the measured head
+  envelope** — `dock_wiggle`'s head part is built from `head_roll`/`head_yaw`/
+  `head_pitch` and timing, keeping the binding `neck_pitch` axis near zero.
+
+### Self-collision check (done, not assumed)
+
+`experiments/animation/phase4_dock_fullbody_sim.py` (a dock sibling to the
+balancing `phase4_integrated_sim.py`) plays the compiled clip through the engine
+in `DOCK` and, per control tick, measures the **signed distance** between every
+pair of geoms on non-adjacent links with MuJoCo's `mj_geomDistance`. The shipped
+MJCF only marks the two foot pads collidable and its CAD meshes are built to
+touch without interpenetrating, so a naive contact count would be vacuous;
+signed distance is not. The neutral hold pose is taken as a baseline (six pairs
+of nested head/trunk meshes already overlap there by design), and the clip is
+asserted to (a) never drive a clear pair to within a 5 mm contact floor and
+(b) never deepen a design-overlap by more than 3 mm. A sensitivity self-test
+perturbs the hips ±0.45 rad and confirms the metric moves by ~0.15 m, proving it
+is live. Result for `dock_wiggle`: **PASS** — the wiggle introduces no new
+approach; the closest genuine clearance (trunk ↔ knee) stays ~13 mm and every
+leg/head channel is inside both the MJCF range and the 5.24 rad/s velocity cap.
+
+Run it with the mujoco venv:
+
+```
+OPEN_DUCK_ANIM_HOME=<repo> \
+  <phase4-venv>/bin/python experiments/animation/phase4_dock_fullbody_sim.py
+```
+
+### It must be deliberately triggered — never automatic
+
+`dock_wiggle` is **not** in the `duck-idle` service's candidate lists and must
+not be added to them. `duck-idle` is head-and-show only by design; a full-body
+clip firing unattended on a robot that might not actually be docked is exactly
+the failure this whole architecture avoids. Play it only as a deliberate,
+attended action, with the robot **genuinely docked or cradled** and a hand near
+the switch.
+
+### Authoring a dock full-body clip
+
+Use the separate entry point `experiments/animation/author_dock_clips.py` (kept
+apart from `author_clips.py` so head-only authoring cannot accidentally emit leg
+motion). `DockClipSpec` fixes `layer_mask="full_body"` and `requires_mode="dock"`
+and the script self-checks the head against the derated **head** envelope and the
+legs against the derated **leg** envelope (and the rate limit) before it writes:
+
+```
+python experiments/animation/author_dock_clips.py --only dock_wiggle \
+  --out-dir experiments/animation/clips
+```

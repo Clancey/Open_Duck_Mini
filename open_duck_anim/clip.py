@@ -163,14 +163,22 @@ def _require(d: Dict[str, Any], key: str) -> Any:
 def _movable_blocks(layer_mask: str, requires_mode: str) -> set:
     """Blocks the animation is *permitted* to move (plan §6.2 capability matrix).
 
-    Head is command/direct in every mode → always movable. Legs are held (dock)
-    or policy-owned (stand/walk) → never movable in Phase 1. ``requires_mode ==
-    "any"`` must satisfy all three modes.
+    Head is command/direct in every mode → always movable. Legs are movable in
+    **exactly one** case: ``requires_mode == "dock"``. When docked/cradled the
+    legs are not load-bearing, no policy is running (``DOCK_DEMO`` bypasses the
+    policy), and there is no balance constraint, so animated leg motion is safe
+    (plan §4.3, §6.2). In every other mode the legs are either held
+    load-relieving (dock is the only place they *may* move, and standing/walking
+    is not dock) or owned by the RL policy (``stand``/``walk``) — animating them
+    there reintroduces the balance problem the whole architecture avoids, so
+    legs stay immovable and any full-body clip is rejected.
+
+    ``requires_mode == "any"`` must satisfy all three modes at once, so it can
+    never move the legs (stand/walk forbid it). This is what makes a full-body
+    clip authorable *only* as ``requires_mode="dock"``.
     """
-    # Legs are movable only if every applicable mode permits animation leg
-    # motion. None do (dock=held, stand/walk=policy). So legs are never movable.
-    # Head is always movable. Result is independent of requires_mode in Phase 1,
-    # but we keep the argument to make the capability dependency explicit.
+    if requires_mode == "dock":
+        return {"head", "legs"}
     return {"head"}
 
 
@@ -376,11 +384,23 @@ def validate_clip_dict(
     violations: List[str] = []
     if not declared.issubset(movable):
         illegal = declared - movable
-        violations.append(
-            "layer_mask %r declares motion on %s but requires_mode %r does not "
-            "permit it (plan §6.2: legs are held in dock and policy-owned in "
-            "stand/walk)" % (layer_mask, sorted(illegal), requires_mode)
-        )
+        if "legs" in illegal:
+            violations.append(
+                "layer_mask %r moves the legs but requires_mode is %r; full-body "
+                "(leg) animation is permitted ONLY with requires_mode=\"dock\". "
+                "On the dock the legs are not load-bearing and no policy runs, so "
+                "animating them is safe; in any/stand/walk the legs are held or "
+                "owned by the RL policy and animated leg motion would reintroduce "
+                "the balance failure the architecture avoids (plan §6.2). Re-author "
+                "this clip as requires_mode=\"dock\", or use layer_mask=\"head\"."
+                % (layer_mask, requires_mode)
+            )
+        else:
+            violations.append(
+                "layer_mask %r declares motion on %s but requires_mode %r does not "
+                "permit it (plan §6.2: legs are held in dock and policy-owned in "
+                "stand/walk)" % (layer_mask, sorted(illegal), requires_mode)
+            )
 
     # Data check: any block NOT permitted-and-declared must be neutral in-data.
     allowed = declared & movable
