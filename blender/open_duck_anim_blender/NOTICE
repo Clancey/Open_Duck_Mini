@@ -1,0 +1,61 @@
+open_duck_anim_blender
+=======================
+
+This addon is a derivative work of:
+
+    Open_Duck_Blender
+    Copyright (c) Pollen Robotics
+    https://github.com/pollen-robotics/Open_Duck_Blender
+    Licensed under the Apache License, Version 2.0 (see the LICENSE file in this
+    directory, copied verbatim from upstream).
+
+Portions of `recorder.py` (frame-mapping helpers `blender_frame_to_robot_frame`,
+`euler_to_quaternion`, `get_root_position`, `get_root_orientation`,
+`get_toe_position`) are adapted from upstream `assets/scripts/data_recording.py`.
+
+Changes made in this fork (Open Duck Mini v2, animation-system Phase 2)
+----------------------------------------------------------------------
+
+D2  — Antenna L/R index swap FIXED. Upstream wrote `antenna.r` to canonical
+      index 9 (`left_antenna`) and `antenna.l` to index 10 (`right_antenna`).
+      Here index 9 = `antenna.l`, index 10 = `antenna.r`, matching
+      `open_duck_anim.JOINT_ORDER_16` / `poly_reference_motion.py`. No sign is
+      applied at record time (LEFT_SIGN=+1 / RIGHT_SIGN=-1 live downstream in the
+      runtime PWM and the compiler's antenna_calibration), so there is no double
+      inversion. See `transform_table.py`.
+
+D3  — Hardcoded `foot_contact = [1, 1]` REPLACED. Contacts are computed from foot
+      geometry (`contacts.compute_foot_contacts`), and a new top-level authoring
+      key `FootContactValid` plus a `contacts_valid` panel toggle let an author
+      explicitly mark non-stepping clips as contact-invalid ([0,0]) so training
+      can zero the contact weight — never a silent [1,1]. See `contacts.py`,
+      `export.py`.
+
+D4  — Non-deterministic wall-clock timer recording REPLACED with an explicit
+      `scene.frame_set()` loop that captures exactly one sample per frame,
+      independent of playback speed. Re-recording the same scene yields
+      byte-identical frames. See `recorder.DataRecorder.record`.
+
+D11 — Baked `± np.deg2rad(10)` knee/ankle offsets REPLACED with a single explicit
+      calibrated zero/sign/axis transform table (`transform_table.JOINT_TRANSFORMS`),
+      one declared row per joint. A regression test pins the zero pose and a set
+      of known joint angles to within 1e-6 rad.
+
+Added
+-----
+
+* MJCF `jnt_range` Limit Rotation bone constraints (`jnt_range.py`,
+  `constraints.py`), idempotently applied so out-of-range poses are unauthorable.
+  Ranges sourced from
+  `Open_Duck_Playground/playground/open_duck_mini_v2/xmls/open_duck_mini_v2.xml`.
+* Clip-metadata panel / export options (`panels.py`): `name`, `layer_mask`,
+  `blend_in_s`/`blend_out_s`, `show_blend_in_s`/`show_blend_out_s`, `loop_mode`,
+  `requires_mode`, `priority` — matching the `.duckanim` schema (plan §5).
+* Export path: writes the 59-float authoring JSON (unchanged training schema)
+  then invokes `open_duck_anim.compiler` to produce the `.duckanim` (reused, not
+  reimplemented).
+* Author-time head safety-envelope warnings (`metadata.head_envelope_warnings`)
+  using `open_duck_anim.envelope.DEFLECTION_LIMITS` (advisory, not a hard block).
+
+The large `open-duck-mini.blend` binary is intentionally NOT vendored into this
+repository. See README.md for how to obtain it via git-lfs.
