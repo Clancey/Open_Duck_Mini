@@ -14,8 +14,8 @@ derated — will play them without the runtime having to clamp anything.
 ## The library
 
 Categories: **A** idle/alive loops · **AM** emotional mood loops · **B**
-curiosity/attention · **C** expressive reactions · **CE** emotional one-shot
-beats · **D** walk-compatible.
+curiosity/attention · **C** expressive reactions (incl. yes/no) · **CE**
+emotional one-shot beats · **CS** scared/fear beats · **D** walk-compatible.
 
 | Clip | Cat | Dur | Loop | Mode | Prio | Path | What it is / when to trigger |
 |------|:---:|----:|------|------|-----:|------|------------------------------|
@@ -27,13 +27,16 @@ beats · **D** walk-compatible.
 | `mood_sleepy` | AM | 12.0s | wrap | stand | 0 | parametric | **Sleepy/drowsy mood**: very slow drift, head settles then rouses slightly, a slow loll, long droopy eye-closes. Set on low battery / late / long idle. |
 | `mood_alert` | AM | 7.5s | wrap | stand | 0 | parametric | **Alert/attentive mood**: upright and still with small sharp scans and long stillness between; wide, rare blink. Set when watching for something. |
 | `mood_grumpy` | AM | 8.5s | wrap | stand | 0 | parametric | **Grumpy/annoyed mood**: a persistent cocked tilt, lowered carriage, terse sharp dismissive turn-aways, terse blinks. Set when repeatedly interrupted / poked. |
+| `mood_scared` | AM | 10.0s | wrap | stand | 0 | parametric | **Scared/frightened mood**: held small and withdrawn, tense frozen stillness broken by quick darting checks, wide eyes with rare blinks. Set on a persistent threat / an ongoing scary situation (use `calm_down` to exit it). |
 | `curious_tilt` | B | 2.6s | once | any | 10 | blender | Inquisitive head-roll tilt held briefly, with a blink. Trigger on "notices something". |
 | `look_toward` | B | 2.2s | once | any | 10 | blender | Directed look toward a point of interest, held, released. Trigger to point attention. |
 | `double_take` | B | 2.4s | once | stand | 12 | blender | Glance away then a quick snap-back double-take. Stand-only (snappy). Trigger for a surprise it re-checks. |
 | `perk_up` | B | 1.8s | once | stand | 15 | blender | Sudden alert perk-up: head lifts, antennas raise, brief scan. Trigger on "attention caught". |
 | `scan_curious` | B | 4.0s | once | any | 10 | blender | Deliberate slow survey scan side-to-side and back. Trigger to "look for" something. |
-| `nod_yes` | C | 2.2s | once | any | 20 | blender | Affirmative double nod. Small enough for any mode. Trigger on yes/acknowledge. |
-| `shake_no` | C | 2.2s | once | stand | 20 | blender | Negative head shake. Stand-only (yaw reads big). Trigger on no/refuse. |
+| `nod_yes` | C | 2.2s | once | any | 20 | blender | **Emphatic "yes"**: anticipation lift + a sharp chin-down beat, 3 nods decaying to a settle. Built from `head_pitch` (~4× headroom), not `neck_pitch`. Legible across a room. Trigger on yes/acknowledge/confirm. |
+| `nod_yes_soft` | C | 1.6s | once | any | 13 | blender | **Soft polite nod**: a single gentle dip. "Noted", not "YES". A quieter answer than `nod_yes`. Trigger on a low-key acknowledgement. |
+| `shake_no` | C | 2.5s | once | stand | 20 | blender | **Decisive "no"**: a wind-up + firm alternating `head_yaw` swings (±0.42) that decay and settle dead-centre. Stand-only (yaw reads big). Trigger on no/refuse/reject. |
+| `shake_no_reluctant` | C | 2.8s | once | stand | 13 | blender | **Reluctant "no"**: a slower, smaller shake with the chin sinking in aversion + a slight tilt. A hesitant "...no", a different message from the firm refusal. Trigger on an unwilling decline. |
 | `happy_bounce` | C | 2.0s | once | stand | 18 | blender | Delighted bob with a bright antenna flick (event). Trigger on success/reward. |
 | `sad_droop` | C | 3.2s | once | stand | 16 | blender | Dejected droop: head sinks, antennas fold back, slow settle with a slow blink. Trigger on failure/idle-too-long. |
 | `startle` | C | 1.6s | once | stand | 30 | blender | Startled recoil then a wary settle. **Highest priority** — preempts everything. Trigger on a sudden event. |
@@ -49,6 +52,10 @@ beats · **D** walk-compatible.
 | `flustered` | CE | 2.2s | once | stand | 20 | blender | Flustered/embarrassed: a wavering look-away + tuck, with the rapid flutter in the **antennas + a double blink** (not the head — see below). Trigger on being caught out / an error it "notices". |
 | `content_sigh` | CE | 2.8s | once | any | 12 | blender | Content sigh: a gentle lift then a slow relaxed exhale settle. A quiet positive beat. Trigger on settling down / a job well done. |
 | `greeting` | CE | 2.4s | once | stand | 18 | blender | Greeting: a friendly "hello" — a warm double bob with a tilt + a bright antenna raise + a happy double blink. Trigger on a person appearing. |
+| `flinch` | CS | 2.4s | once | stand | 26 | blender | Flinch: a fast aversive recoil (head snaps back and averts, ears pin, eyes wide) then a **slow tentative return**. The wary recovery is what separates it from `startle`. Trigger on a near-miss / a sudden looming thing. |
+| `cower` | CS | 3.0s | once | stand | 25 | blender | Cower: shrink small — head tucked and turned away, ears pinned back and held, eyes wide, a tiny tense micro-shift. A **sustained** fear pose. Trigger on a persistent threat / being loomed over. |
+| `nervous_lookaround` | CS | 3.2s | once | stand | 23 | blender | Nervous look-around: tense quick darting threat-checks over a withdrawn wary carriage, ears half-back, eyes wide. Trigger on "did I hear something?" / feeling unsafe. |
+| `calm_down` | CS | 3.4s | once | stand | 19 | blender | Calm down (**recovery**): release from fear to neutral — un-tuck, face forward, ears un-pin and relax, a flurry of relieved blinks. Trigger to **exit** fear so the emotion never looks stuck; also bridges `mood_scared` → a neutral/content mood. |
 | `walk_look_around` | D | 7.0s | wrap | walk | 5 | parametric | Gentle gaze wander to overlay **while walking**. Small, legible, seamless loop. |
 | `walk_alert` | D | 2.0s | once | walk | 15 | blender | Contained "something caught my eye" alert usable mid-stride. |
 
@@ -61,12 +68,12 @@ The duck can now **be** in a mood and **do** emotional beats, not just react.
 
 * **Mood loops (`mood_*`, category AM)** are the real unlock: seamless `wrap`
   loops at `priority 0` that the duck can *sit in* for minutes, so it can be
-  happy / sad / sleepy / alert / grumpy as an ambient state. Each reads
-  distinctly at a glance from **posture and rhythm alone** — higher vs lower
-  head carriage, a persistent tilt, fast-and-bright vs slow-and-heavy timing,
-  and blink cadence. They are `requires_mode = "stand"` (standing **or** docked,
-  not walking): a mood is a *resting* state, and the walking gait swamps its
-  subtle motion (the phase-4 head-follow check confirmed the two subtlest moods
+  happy / sad / sleepy / alert / grumpy / **scared** as an ambient state. Each
+  reads distinctly at a glance from **posture and rhythm alone** — higher vs
+  lower head carriage, a persistent tilt, fast-and-bright vs slow-and-heavy
+  timing, and blink cadence. They are `requires_mode = "stand"` (standing **or**
+  docked, not walking): a mood is a *resting* state, and the walking gait swamps
+  its subtle motion (the phase-4 head-follow check confirmed the subtlest moods
   do not read over a gait), so while walking the neutral idles + `walk_look_around`
   take over. Antennas are held flat at rest in every mood loop (owner decision,
   enforced by the guard test); the blink cadence carries the eye expression.
@@ -78,6 +85,51 @@ The duck can now **be** in a mood and **do** emotional beats, not just react.
   amplitudes; sharpness, rhythm and recovery time separate them. Antennas *are*
   used here (brief crisp flicks/folds read as ears and are momentary, not the
   sustained loop buzz the owner objected to).
+
+### Saying yes and no (category C) — communicative, not decorative
+
+`nod_yes` / `shake_no` are treated as **first-class communicative gestures**: the
+duck should answer a question legibly from across a room. Two things make them read:
+
+* **Built from the axis with headroom.** A nod is `head_pitch` (which uses only
+  ~¼ of its derated range), **not** `neck_pitch` (which is effectively maxed).
+  An earlier note that `nod_yes` was "fighting the envelope" was a mis-diagnosis —
+  it had conflated the nod with the maxed neck axis. `nod_yes` now peaks at 0.24
+  rad of `head_pitch` (‖c/L‖ 0.65, no clamp). A shake is `head_yaw` (huge
+  headroom), now ±0.42 rad for a decisive, unambiguous read.
+* **Properly shaped, not a sine.** A nod has a small **anticipation** lift, a
+  **sharp down-beat** with a gentler recovery, and **three nods of decaying
+  amplitude** that settle. A shake has a wind-up then firm **alternating swings
+  that decay** and return dead-centre. The swing rate is held ~1.3 Hz so the soft
+  kp=8 head servo still tracks it (validated: `shake_no` weighted head-follow
+  corr 0.95).
+* **Intensity variants carry different messages.** `nod_yes_soft` (a single
+  gentle dip) says "noted", not "YES". `shake_no_reluctant` (slower, smaller,
+  chin sinking in aversion) is a hesitant "...no", a genuinely different message
+  from the firm refusal. These read as distinct because timing/energy, not just
+  direction, is what the viewer reads.
+
+### Scared — a spike, a state, and a way out (category CS + `mood_scared`)
+
+"Acting scared" is more than `startle` (a 1.6 s bidirectional spike). Fear is
+built here as **all three**:
+
+* **A state to sit in** — `mood_scared` (AM, `wrap`, prio 0): held small and
+  withdrawn, tense frozen stillness broken by quick darting checks, wide eyes
+  with rare blinks. Stillness punctuated by sharp checks reads as fear far better
+  than continuous motion — so most of the loop is *still*, with just two quick
+  darts. Antennas are silent (loop rule); the tense micro-tremor rides on the
+  sub-follow-floor pitch/neck so it reads as tension without asking the servo to
+  chase it.
+* **Spikes/beats** — `flinch` (fast aversive recoil, **slow** tentative return —
+  the wary recovery is what makes it fear, not startle), `cower` (a sustained
+  shrink-small pose, ears pinned, held), `nervous_lookaround` (tense darting
+  threat-checks). Antennas earn their keep here: a **fast pin-BACK** (ears
+  flattened) reads unmistakably as fear, and eyes go WIDE (the `wide` event).
+* **A way out** — `calm_down` releases fear back to neutral (un-tuck, face
+  forward, ears un-pin, a flurry of relieved blinks). **Emotions that can only be
+  entered look broken**; this is the believable exit, and it also bridges
+  `mood_scared` → a neutral or content mood.
 
 ### Eyes are an emotional channel
 
@@ -95,12 +147,19 @@ cues (see `runtime/pi/idle_service.py`, `EyeDriver`):
   blink** (excited / delighted / flustered).
 
 **Runtime gaps worth closing (named, not faked):** there is no **squint /
-half-closed held** cue and no **variable-speed blink** event. `suspicious_wary`
-would read sharper with a squint, and `mood_sad` would benefit from a genuinely
-*slow* blink event rather than a long hard close. Both are currently approximated
-with the per-frame `eyes` track. If you extend the runtime, a `squint` (hold the
-lids partly closed) and a `slow_blink` (eased close/open over a settable duration)
-are the two highest-value additions.
+half-closed held** cue, no **variable-speed blink** event, and no **sustained
+wide / suppressed-blink** mode. `suspicious_wary` would read sharper with a
+squint; `mood_sad` would benefit from a genuinely *slow* blink event rather than
+a long hard close; and **fear** (`mood_scared`, `cower`, `nervous_lookaround`)
+wants eyes held **wide for longer than the ~1 s the `wide` event lasts, with
+blinking suppressed** — real fear is wide-eyed and *doesn't* blink, then releases
+in a burst (which `calm_down` does do). Today the fear clips hold the per-frame
+`eyes` track open and fire `wide` where they can, which approximates it but the
+wide doesn't persist across a multi-second cower. All are currently approximated
+with the per-frame `eyes` track. If you extend the runtime, the three
+highest-value additions are: a `squint` (hold the lids partly closed), a
+`slow_blink` (eased close/open over a settable duration), and a `wide_hold` /
+`fear` mode (sustained wide with suppressed blinking until released).
 
 ### Authoring emotion: build it from roll / pitch / timing / eyes — **not** `neck_pitch`
 

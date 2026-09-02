@@ -505,6 +505,38 @@ def build_specs() -> List[ClipSpec]:
         eyes=((0.0, 1), (1.5, 0), (1.7, 1), (5.6, 0), (5.8, 1)),  # terse blinks
     ))
 
+    # M6) Scared / frightened: fear as a STATE, not the startle spike. Held small
+    # and withdrawn (chin slightly down), very STILL with a slow uneasy sway and a
+    # tiny fast tense micro-tremor (on the sub-follow-floor pitch/neck so it reads
+    # as tension without asking the servo to track it), punctuated by two quick
+    # darting glances with long frozen stillness between — stillness broken by
+    # sharp checks reads as fear far better than continuous motion. Wide eyes
+    # (per-frame track held open) with one rare blink. Antennas ZERO (loop rule).
+    # Period 10.0 s: unused by any other background layer so nothing ever syncs.
+    d = 10.0
+    f = 1.0 / d
+    specs.append(ClipSpec(
+        name="mood_scared", duration_s=d, loop_mode="wrap", requires_mode="stand",
+        priority=0, blend_in_s=0.4, blend_out_s=0.5, show_blend_in_s=0.1,
+        show_blend_out_s=0.1,
+        doc="Scared/frightened mood loop: held small and wary, tense stillness, darting checks.",
+        neck_pitch=const(0.03) + sine(10 * f, 0.006, 1.0),   # slight withdraw + 1 Hz tense tremor
+        head_pitch=const(0.06) + sine(10 * f, 0.008, 0.0),   # withdrawn carriage + tense micro-tremor
+        head_roll=sine(f, 0.014, 0.0),                       # a slow small uneasy sway
+        head_yaw=keys([(0.0, 0.0),
+                       (2.0, 0.0, "hold"),
+                       (2.3, 0.13, "ease_out"),              # a quick dart to check
+                       (2.6, 0.12, "hold"),
+                       (2.95, 0.0, "smooth"),                # back to frozen
+                       (5.5, 0.0, "hold"),
+                       (5.8, -0.11, "ease_out"),             # a dart the other way
+                       (6.1, -0.10, "hold"),
+                       (6.45, 0.0, "smooth"),
+                       (10.0, 0.0, "hold")], loop=True, duration=d),
+        antenna_l=ZERO, antenna_r=ZERO,
+        eyes=((0.0, 1), (6.0, 0), (6.08, 1)),                # wide, one rare quick blink
+    ))
+
     # ---- B. Curiosity / attention (once) ------------------------------------
 
     # 4) Curious head tilt with a hold + a single blink partway in.
@@ -585,27 +617,103 @@ def build_specs() -> List[ClipSpec]:
 
     # ---- C. Expressive reactions (once) -------------------------------------
 
-    # 9) Yes-nod: two chin-down nods with follow-through, small neck bob.
+    # 9) Yes-nod: an EMPHATIC, legible "yes" built the right way — from head_pitch,
+    # which has ~4x the headroom of the (maxed) neck_pitch axis. A real nod is not
+    # a symmetric sine: it has a small anticipation lift, a SHARP down-beat
+    # ("ease_out" = quick chin-drop that decelerates into the pose), a gentler
+    # recovery, and 3 nods of decreasing amplitude that settle. neck_pitch adds
+    # only a hint of full-body bob (it is the binding axis, so it stays small).
     specs.append(ClipSpec(
         name="nod_yes", authoring_path="blender", duration_s=2.2, loop_mode="once", requires_mode="any",
         priority=20, blend_in_s=0.15, blend_out_s=0.25,
-        doc="Affirmative double nod (yes). Small enough to use in any mode.",
-        head_pitch=(pulse(0.55, 0.4, 0.20) + pulse(1.25, 0.4, 0.17)),
-        neck_pitch=(pulse(0.55, 0.45, 0.05) + pulse(1.25, 0.45, 0.04)),
-        antenna_l=pulse(0.55, 0.7, 0.10),
-        antenna_r=pulse(0.55, 0.7, 0.08),
+        doc="Emphatic affirmative nod (yes): anticipation + a sharp down-beat, 3 decaying nods.",
+        head_pitch=keys([(0.0, 0.0),
+                         (0.20, -0.05, "ease_out"),   # anticipation: a small lift first
+                         (0.46, 0.24, "ease_out"),    # nod 1: sharp chin-down (the accent)
+                         (0.74, 0.01, "smooth"),      # recovery (gentler than the down-beat)
+                         (1.00, 0.16, "ease_out"),    # nod 2: down, smaller
+                         (1.26, 0.01, "smooth"),      # recovery
+                         (1.50, 0.09, "ease_out"),    # nod 3: down, smallest
+                         (1.80, 0.0, "smooth"),       # settle to rest
+                         (2.2, 0.0, "hold")]),
+        neck_pitch=keys([(0.0, 0.0),
+                         (0.46, 0.035, "ease_out"),   # a hint of full-body bob (neck is maxed: tiny)
+                         (0.74, 0.0, "smooth"),
+                         (1.00, 0.02, "ease_out"),
+                         (1.26, 0.0, "smooth"),
+                         (2.2, 0.0, "hold")]),
+        head_roll=sine(0.7, 0.02, 0.0),               # a touch of asymmetry: not a dead-straight machine nod
+        antenna_l=(pulse(0.46, 0.5, 0.14) + pulse(1.0, 0.5, 0.10)),  # small crisp bob with the nods
+        antenna_r=(pulse(0.46, 0.5, 0.12) + pulse(1.0, 0.5, 0.09)),
     ))
 
-    # 10) No-shake: head yaw oscillation, antennas trailing (follow-through).
+    # 9b) Soft yes: a small, polite acknowledging nod — a single gentle dip with a
+    # tiny second beat. A genuinely different message from the emphatic yes: "noted"
+    # rather than "YES". Small enough for any mode.
     specs.append(ClipSpec(
-        name="shake_no", authoring_path="blender", duration_s=2.2, loop_mode="once", requires_mode="stand",
+        name="nod_yes_soft", authoring_path="blender", duration_s=1.6, loop_mode="once", requires_mode="any",
+        priority=13, blend_in_s=0.15, blend_out_s=0.3,
+        doc="Soft polite acknowledging nod: a single gentle dip. 'Noted', not 'YES'.",
+        head_pitch=keys([(0.0, 0.0),
+                         (0.30, 0.10, "ease_out"),    # one gentle nod down
+                         (0.70, 0.01, "smooth"),
+                         (1.00, 0.05, "ease_out"),    # a tiny second beat
+                         (1.55, 0.0, "smooth")]),
+        neck_pitch=keys([(0.0, 0.0), (0.30, 0.02, "ease_out"), (0.70, 0.0, "smooth"),
+                         (1.6, 0.0, "hold")]),
+        head_roll=sine(0.9, 0.015, 0.0),
+        antenna_l=pulse(0.30, 0.4, 0.06),             # a single tiny crisp bob
+        antenna_r=pulse(0.30, 0.4, 0.05),
+    ))
+
+    # 10) No-shake: a DECISIVE, legible "no" built from head_yaw (which has huge
+    # headroom). A small wind-up one way (anticipation), then firm alternating
+    # swings that decay and settle centred. Amplitude (0.42) is well up from the
+    # old 0.34 for an unambiguous read, but the swing rate is kept ~1.3 Hz so the
+    # soft kp=8 head servo can still track it (fast oscillation would lag). A hair
+    # of counter-roll keeps it from reading mechanical. Distinct from idle scans:
+    # bigger, faster, alternating, and it returns dead-centre.
+    specs.append(ClipSpec(
+        name="shake_no", authoring_path="blender", duration_s=2.5, loop_mode="once", requires_mode="stand",
         priority=20, blend_in_s=0.15, blend_out_s=0.3,
-        doc="Negative head shake (no). Stand only — yaw amplitude reads big.",
-        head_yaw=(pulse(0.55, 0.35, 0.34) + pulse(1.1, 0.35, -0.34)
-                  + pulse(1.6, 0.32, 0.22)),
-        head_roll=sine(1.4, 0.03, 0.0),
-        antenna_l=(pulse(0.7, 0.5, 0.12) + pulse(1.25, 0.5, -0.08)),  # trailing
-        antenna_r=(pulse(0.7, 0.5, 0.10) + pulse(1.25, 0.5, -0.06)),
+        doc="Decisive negative shake (no): wind-up + firm alternating swings that decay.",
+        head_yaw=keys([(0.0, 0.0),
+                       (0.25, -0.10, "ease_out"),     # anticipation: a small wind-up
+                       (0.58, 0.42, "ease_out"),      # swing 1 (decisive)
+                       (0.98, -0.38, "smooth"),       # swing 2
+                       (1.35, 0.26, "smooth"),        # swing 3, decaying
+                       (1.70, -0.16, "smooth"),       # swing 4
+                       (2.00, 0.06, "smooth"),        # settle swing
+                       (2.30, 0.0, "smooth"),         # dead centre
+                       (2.5, 0.0, "hold")]),
+        head_roll=sine(1.2, 0.03, 0.0),               # slight natural counter-roll
+        antenna_l=(pulse(0.75, 0.5, 0.12) + pulse(1.35, 0.5, -0.08)),  # trailing follow-through
+        antenna_r=(pulse(0.75, 0.5, 0.10) + pulse(1.35, 0.5, -0.06)),
+    ))
+
+    # 10b) Reluctant no: a slower, smaller shake with the chin sinking (aversion)
+    # and a slight persistent downward tilt. A hesitant "...no", genuinely
+    # different from the firm refusal above.
+    specs.append(ClipSpec(
+        name="shake_no_reluctant", authoring_path="blender", duration_s=2.8, loop_mode="once", requires_mode="stand",
+        priority=13, blend_in_s=0.25, blend_out_s=0.4,
+        doc="Reluctant/hesitant no: a slow small shake with the chin dropping in aversion.",
+        head_yaw=keys([(0.0, 0.0),
+                       (0.60, -0.17, "ease_out"),     # a slow, small turn away
+                       (1.35, 0.13, "smooth"),        # slow return past centre
+                       (2.00, -0.09, "smooth"),       # a smaller second turn
+                       (2.8, 0.0, "smooth")]),
+        head_pitch=keys([(0.0, 0.0),
+                         (0.70, 0.11, "ease_out"),     # chin sinks: reluctance / aversion
+                         (2.00, 0.10, "hold"),
+                         (2.8, 0.0, "smooth")]),
+        head_roll=keys([(0.0, 0.0), (0.70, 0.05, "ease_out"), (2.00, 0.05, "hold"),
+                        (2.8, 0.0, "smooth")]),        # a slight held tilt
+        antenna_l=keys([(0.0, 0.0), (0.80, -0.20, "ease_out"), (2.00, -0.18, "hold"),
+                        (2.8, 0.0, "smooth")]),        # a reluctant half-fold
+        antenna_r=keys([(0.0, 0.0), (0.80, -0.20, "ease_out"), (2.00, -0.18, "hold"),
+                        (2.8, 0.0, "smooth")]),
+        eyes=((0.0, 1), (1.0, 0), (1.3, 1)),          # a slow reluctant blink
     ))
 
     # 11) Happy bounce: neck bob up + a bright antenna flick (event on the flick).
@@ -917,6 +1025,110 @@ def build_specs() -> List[ClipSpec]:
         antenna_r=keys([(0.0, 0.0), (0.4, 0.30, "ease_out"), (1.4, 0.26, "hold"),
                         (2.4, 0.05)]),
         events=(("eye", "happy", 0.45),),                 # friendly double blink
+    ))
+
+    # ---- CS. Scared / fear one-shot beats -----------------------------------
+    #
+    # "Acting scared" is distinct from `startle` (a 1.6 s bidirectional spike).
+    # These are fear beats you enter and — crucially — a `calm_down` that exits
+    # fear back to neutral, so the emotion never looks stuck. Antennas are hugely
+    # useful here: a fast pin-BACK (ears flattened) reads unmistakably as fear, and
+    # a slow un-pin reads as the tension leaving. Eyes go WIDE (the runtime `wide`
+    # event holds them open ~1 s). All are stand-only: the poses are withdrawn and
+    # large enough that they don't belong over a gait.
+
+    # S1) Flinch: a fast aversive recoil — head snaps back and AVERTS to the side,
+    # ears pin back, eyes snap wide — then a SLOW, tentative return (the recovery
+    # is what separates a flinch from a startle: it comes back warily, not briskly).
+    specs.append(ClipSpec(
+        name="flinch", authoring_path="blender", duration_s=2.4, loop_mode="once",
+        requires_mode="stand", priority=26, blend_in_s=0.06, blend_out_s=0.4,
+        doc="Flinch: a fast aversive recoil away, then a slow tentative return.",
+        head_pitch=keys([(0.0, 0.0), (0.14, -0.09, "ease_out"), (0.5, -0.05, "smooth"),
+                         (1.3, 0.03, "smooth"), (2.4, 0.0, "smooth")]),   # quick pull back, slow settle
+        head_yaw=keys([(0.0, 0.0), (0.15, -0.22, "ease_out"), (0.55, -0.17, "smooth"),
+                       (1.5, -0.05, "smooth"), (2.4, 0.0, "smooth")]),     # avert away fast, return slow
+        head_roll=keys([(0.0, 0.0), (0.17, -0.09, "ease_out"), (0.6, -0.07, "smooth"),
+                        (1.6, -0.02, "smooth"), (2.4, 0.0, "smooth")]),    # flinch tilt away
+        neck_pitch=keys([(0.0, 0.0), (0.15, -0.05, "ease_out"), (0.5, -0.03, "smooth"),
+                         (2.4, 0.0, "smooth")]),                            # small recoil back
+        antenna_l=keys([(0.0, 0.0), (0.26, -0.48, "smooth"), (1.2, -0.40, "hold"),
+                        (2.4, -0.03, "smooth")]),                          # ears pin back fast, slow release
+        antenna_r=keys([(0.0, 0.0), (0.26, -0.48, "smooth"), (1.2, -0.40, "hold"),
+                        (2.4, -0.03, "smooth")]),
+        events=(("eye", "wide", 0.15),),                                   # eyes snap wide
+    ))
+
+    # S2) Cower: shrink and make itself small — tuck the head down, turn and tilt
+    # away, ears pinned back and HELD, eyes wide. A sustained fear pose (not a
+    # spike). A tiny tense micro-shift during the hold keeps it from freezing dead.
+    specs.append(ClipSpec(
+        name="cower", authoring_path="blender", duration_s=3.0, loop_mode="once",
+        requires_mode="stand", priority=25, blend_in_s=0.12, blend_out_s=0.5,
+        doc="Cower: shrink small — head tucked and turned away, ears pinned, eyes wide, held.",
+        head_pitch=keys([(0.0, 0.0), (0.4, 0.14, "ease_out"), (2.4, 0.13, "hold"),
+                         (3.0, 0.0, "smooth")]),                            # tuck down, hold small
+        neck_pitch=keys([(0.0, 0.0), (0.4, 0.045, "ease_out"), (2.4, 0.045, "hold"),
+                         (3.0, 0.0, "smooth")]),
+        head_roll=keys([(0.0, 0.0), (0.45, -0.09, "ease_out"), (2.4, -0.085, "hold"),
+                        (3.0, 0.0, "smooth")]),                            # withdrawn tilt away, held
+        head_yaw=keys([(0.0, 0.0), (0.45, -0.11, "ease_out"), (1.2, -0.10, "hold"),
+                       (1.8, -0.13, "smooth"), (2.4, -0.10, "smooth"),
+                       (3.0, 0.0, "smooth")]),                             # turned away + a tense micro-check
+        antenna_l=keys([(0.0, 0.0), (0.3, -0.45, "smooth"), (2.4, -0.42, "hold"),
+                        (3.0, -0.03, "smooth")]),                          # ears pinned back, held
+        antenna_r=keys([(0.0, 0.0), (0.3, -0.45, "smooth"), (2.4, -0.42, "hold"),
+                        (3.0, -0.03, "smooth")]),
+        events=(("eye", "wide", 0.2),),
+    ))
+
+    # S3) Nervous look-around: tense scanning for a threat — quick darting checks
+    # left/right that decay, over a slightly withdrawn carriage, ears held wary
+    # half-back, eyes wide. The darts are quick but not oscillatory (each reaches
+    # and briefly holds) so the soft head servo still tracks them.
+    specs.append(ClipSpec(
+        name="nervous_lookaround", authoring_path="blender", duration_s=3.2, loop_mode="once",
+        requires_mode="stand", priority=23, blend_in_s=0.1, blend_out_s=0.35,
+        doc="Nervous look-around: tense darting threat-checks over a withdrawn, wary carriage.",
+        head_pitch=keys([(0.0, 0.0), (0.4, 0.05, "ease_out"), (2.6, 0.045, "hold"),
+                         (3.2, 0.0, "smooth")]),                            # slightly withdrawn
+        head_yaw=keys([(0.0, 0.0),
+                       (0.4, 0.20, "ease_out"), (0.65, 0.19, "hold"),       # check right
+                       (1.05, -0.22, "smooth"), (1.3, -0.21, "hold"),       # snap-check left
+                       (1.7, 0.15, "smooth"), (1.95, 0.14, "hold"),         # check right, smaller
+                       (2.4, -0.10, "smooth"), (2.65, -0.09, "hold"),
+                       (3.2, 0.0, "smooth")]),
+        head_roll=sine(0.8, 0.02, 0.0),                                     # a slight uneasy waver
+        antenna_l=keys([(0.0, 0.0), (0.3, -0.25, "smooth"), (2.6, -0.22, "hold"),
+                        (3.2, -0.02, "smooth")]),                           # wary half-back
+        antenna_r=keys([(0.0, 0.0), (0.3, -0.25, "smooth"), (2.6, -0.22, "hold"),
+                        (3.2, -0.02, "smooth")]),
+        events=(("eye", "wide", 0.1),),
+    ))
+
+    # S4) Calm down: the RECOVERY beat — exit fear back to neutral so the emotion
+    # never looks stuck. Starts in a held-tense withdrawn pose, then releases: the
+    # chin lifts (relief), the head returns to face forward (safe), the ears un-pin
+    # and relax, and a flurry of relieved blinks settles to calm. Use after any
+    # fear beat, or to transition mood_scared -> a neutral/content mood.
+    specs.append(ClipSpec(
+        name="calm_down", authoring_path="blender", duration_s=3.4, loop_mode="once",
+        requires_mode="stand", priority=19, blend_in_s=0.25, blend_out_s=0.5,
+        doc="Calm down: release from fear to neutral — un-tuck, un-pin ears, a flurry of relieved blinks.",
+        head_pitch=keys([(0.0, 0.10), (0.5, 0.10, "hold"), (1.1, -0.05, "ease_out"),
+                         (1.9, 0.03, "smooth"), (3.4, 0.0, "smooth")]),    # held tense -> release/lift -> soft settle
+        neck_pitch=keys([(0.0, 0.03), (0.5, 0.03, "hold"), (1.2, -0.02, "smooth"),
+                         (3.4, 0.0, "smooth")]),
+        head_yaw=keys([(0.0, -0.10), (0.5, -0.10, "hold"), (1.3, 0.03, "smooth"),
+                       (3.4, 0.0, "smooth")]),                             # turned away -> face forward (safe)
+        head_roll=keys([(0.0, -0.06), (0.5, -0.06, "hold"), (1.3, 0.02, "smooth"),
+                        (3.4, 0.0, "smooth")]),                            # untilt
+        antenna_l=keys([(0.0, -0.40), (0.5, -0.40, "hold"), (1.3, 0.06, "ease_out"),
+                        (2.3, 0.0, "smooth"), (3.4, 0.0, "hold")]),        # ears un-pin and relax
+        antenna_r=keys([(0.0, -0.40), (0.5, -0.40, "hold"), (1.3, 0.06, "ease_out"),
+                        (2.3, 0.0, "smooth"), (3.4, 0.0, "hold")]),
+        eyes=((0.0, 1), (1.15, 0), (1.23, 1), (1.45, 0), (1.53, 1),
+              (1.78, 0), (1.86, 1)),                                       # a flurry of relieved blinks, then calm
     ))
 
     # ---- D. Walk-compatible variants (small amplitude, requires_mode=walk) ---
