@@ -23,6 +23,8 @@ class JointSafetyLimiter:
             raise ValueError("margin must be >= 0")
         if velocity_scale < 0.0:
             raise ValueError("velocity_scale must be >= 0")
+        if max_accel is not None and np.any(np.asarray(max_accel) < 0.0):
+            raise ValueError("max_accel must be >= 0")
         self.dt = float(dt)
         self.margin = float(margin)
         self.velocity_scale = float(velocity_scale)
@@ -65,21 +67,29 @@ class JointSafetyLimiter:
         if np.any(lower > upper):
             raise ValueError("margin exceeds at least one joint's range")
         position_limited = np.clip(safe_target, lower, upper)
-        self.clamped_joints = [
-            joint
-            for joint, wanted, bounded in zip(ALL_JOINTS, safe_target, position_limited)
-            if wanted != bounded
-        ]
+        position_clamped = safe_target != position_limited
+        requested_delta = position_limited - previous
         velocity_delta = np.clip(
-            position_limited - previous, -self._velocity * self.dt, self._velocity * self.dt
+            requested_delta, -self._velocity * self.dt, self._velocity * self.dt
         )
+        rate_clamped = requested_delta != velocity_delta
+        accel_clamped = np.zeros_like(rate_clamped, dtype=bool)
         if self.max_accel is not None and self._previous_delta is not None:
             accel = np.asarray(self.max_accel, dtype=np.float32)
-            velocity_delta = np.clip(
+            acceleration_limited = np.clip(
                 velocity_delta,
                 self._previous_delta - accel * self.dt * self.dt,
                 self._previous_delta + accel * self.dt * self.dt,
             )
+            accel_clamped = velocity_delta != acceleration_limited
+            velocity_delta = acceleration_limited
+        self.clamped_joints = [
+            joint
+            for joint, clamped in zip(
+                ALL_JOINTS, position_clamped | rate_clamped | accel_clamped
+            )
+            if clamped
+        ]
         output = previous + velocity_delta
         self._previous_delta = velocity_delta.copy()
         return output.astype(np.float32)
