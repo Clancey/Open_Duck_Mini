@@ -1,0 +1,49 @@
+[Unit]
+Description=Open Duck Mini v2 - idle "alive" animation (head + eyes only, legs never torqued)
+Documentation=file:/home/clancey/duck/INSTALL_SERVICE.md
+# Wait for the CH343 USB serial (Feetech bus) by its stable by-id path. The
+# runner also waits for the device itself, so this is belt & braces.
+Wants=dev-serial-by\x2did-usb\x2d1a86_USB_Single_Serial_58FA095764\x2dif00.device
+After=dev-serial-by\x2did-usb\x2d1a86_USB_Single_Serial_58FA095764\x2dif00.device
+After=basic.target
+# A persistent fault trips this and systemd gives up instead of thrashing servos.
+StartLimitIntervalSec=300
+StartLimitBurst=4
+
+[Service]
+Type=simple
+User=clancey
+Group=clancey
+# Serial bus is group dialout; antenna/eye GPIO is group gpio.
+SupplementaryGroups=dialout gpio
+WorkingDirectory=/home/clancey/duck
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/clancey
+Environment=OPEN_DUCK_ANIM_HOME=/home/clancey/duck/Open_Duck_Mini
+# --- tunables (uncomment/edit to taste) ---
+# Environment=DUCK_IDLE_ACTIVE_S=480      # animate this long before a relax/thermal checkpoint
+# Environment=DUCK_IDLE_RELAX_S=20        # head fully de-energised (limp) + thermal scan
+# Environment=DUCK_IDLE_ANTENNAS=0        # 1 to faithfully play antenna show (owner: noisy)
+
+ExecStart=/home/clancey/duck/venv/bin/python -u /home/clancey/duck/idle_service.py
+
+# Graceful stop: SIGTERM triggers the runner's in-process shutdown (head eased to
+# rest, torque off, antennas neutral, eyes off). Then, belt & braces, force every
+# servo torque-OFF via raw pyserial in case the process died uncleanly.
+KillSignal=SIGTERM
+TimeoutStopSec=25
+ExecStopPost=/home/clancey/duck/venv/bin/python /home/clancey/duck/idle_safe_off.py
+
+# Fail safe, not loud: restart only on failure, backed off, and capped by the
+# StartLimit above so a persistent fault stops rather than looping forever.
+Restart=on-failure
+RestartSec=10
+
+# Modest hardening (this only talks to a serial port + GPIO; no network needed).
+NoNewPrivileges=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+RestrictRealtime=no
+
+[Install]
+WantedBy=multi-user.target
