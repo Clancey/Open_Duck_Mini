@@ -1,7 +1,7 @@
-From 72414d8487121ad29703b096250039067564747f Mon Sep 17 00:00:00 2001
+From cd88b70dc189879e8eb4e0d3d6cf078a71cc356b Mon Sep 17 00:00:00 2001
 From: James Clancey <james.clancey@gmail.com>
 Date: Wed, 2 Sep 2026 06:07:55 -0800
-Subject: [PATCH] Phase 4: wire open_duck_anim animation engine into the
+Subject: [PATCH 1/3] Phase 4: wire open_duck_anim animation engine into the
  on-robot runtime
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -58,16 +58,15 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  .../mini_bdx_runtime/anim/controller.py       |  476 ++
  mini_bdx_runtime/mini_bdx_runtime/anim/fsm.py |  403 ++
  .../mini_bdx_runtime/anim/hardware.py         |  221 +
- .../mini_bdx_runtime/anim/real_robot.py       |  250 +
+ .../mini_bdx_runtime/anim/real_robot.py       |  199 +
  .../mini_bdx_runtime/anim/safety.py           |  287 ++
- scripts/dock_demo.py                          |  251 +
+ scripts/dock_demo.py                          |  248 +
  scripts/v2_rl_walk_mujoco.py                  |  125 +-
  tests/conftest.py                             |   39 +
  tests/test_controller.py                      |  244 +
  tests/test_fsm.py                             |  236 +
- tests/test_real_robot.py                      |  183 +
  tests/test_safety.py                          |  149 +
- 15 files changed, 7390 insertions(+), 10 deletions(-)
+ 14 files changed, 7153 insertions(+), 10 deletions(-)
  create mode 100644 clips/gen_idle_alive.py
  create mode 100644 clips/idle_alive.duckanim
  create mode 100644 mini_bdx_runtime/mini_bdx_runtime/anim/__init__.py
@@ -80,7 +79,6 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  create mode 100644 tests/conftest.py
  create mode 100644 tests/test_controller.py
  create mode 100644 tests/test_fsm.py
- create mode 100644 tests/test_real_robot.py
  create mode 100644 tests/test_safety.py
 
 diff --git a/clips/gen_idle_alive.py b/clips/gen_idle_alive.py
@@ -5758,10 +5756,10 @@ index 0000000..ea80c9b
 +        super().shutdown_show()
 diff --git a/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py b/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
 new file mode 100644
-index 0000000..e90c85e
+index 0000000..981f9ea
 --- /dev/null
 +++ b/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,199 @@
 +"""On-robot adapter implementing :class:`RobotInterface` (plan §6.1, §6.5).
 +
 +This is the ONLY module in the ``anim`` subpackage that touches physical
@@ -5776,14 +5774,7 @@ index 0000000..e90c85e
 +* tilt                -> ``raw_imu.Imu`` accelerometer gravity estimate (the
 +  runtime IMU exposes only gyro+accel, no orientation quaternion, so we derive
 +  the tilt-from-vertical angle here and document it)
-+* antennas            -> ``antennas.Antennas`` (PWM D13 left +1 / D12 right -1).
-+  ``Antennas()`` drives the PWM pins the instant it is constructed, so it is
-+  **not** built in ``connect``. It is created lazily the first time a genuine
-+  (non-neutral) antenna command is issued, which only happens once the FSM has
-+  left ``DISARMED`` and an animation actually articulates the antennas. Merely
-+  connecting — or holding in ``BOOT``/``DISARMED``/``FAULT`` — never energises
-+  the antenna pins. Pass ``enable_antennas=False`` (or ``connect(actuate=False)``
-+  for a read-only inspection attach) to keep the antennas dark unconditionally.
++* antennas            -> ``antennas.Antennas`` (PWM D13 left +1 / D12 right -1)
 +* eyes                -> ``eyes.Eyes`` (its auto-blink thread is stopped so the
 +  animation eye track has exclusive control)
 +* sounds              -> ``sounds.Sounds``
@@ -5833,19 +5824,13 @@ index 0000000..e90c85e
 +
 +    def __init__(self, duck_config=None, usb_port: str = "/dev/ttyACM0",
 +                 sound_directory: str = "./", enable_sounds: bool = True,
-+                 enable_projector: bool = True, enable_eyes: bool = True,
-+                 enable_antennas: bool = True):
++                 enable_projector: bool = True, enable_eyes: bool = True):
 +        self.usb_port = usb_port
 +        self._duck_config = duck_config
 +        self._sound_directory = sound_directory
 +        self._enable_sounds = enable_sounds
 +        self._enable_projector = enable_projector
 +        self._enable_eyes = enable_eyes
-+        self._enable_antennas = enable_antennas
-+        # Whether this connection is allowed to energise motion hardware. Set by
-+        # connect(actuate=...). Defaults to False until connect() runs so a
-+        # freshly-constructed (never connected) adapter never actuates.
-+        self._actuate = False
 +
 +        self.hwi = None
 +        self.imu = None
@@ -5855,32 +5840,17 @@ index 0000000..e90c85e
 +        self.projector = None
 +        self._connected = False
 +
-+    def connect(self, actuate: bool = True) -> None:
-+        """Lazily import and open every device. Raises if hardware is absent.
-+
-+        Opening the bus (``HWI``) and the IMU is **read-capable but passive**:
-+        the servos come up torque-off and ``connect`` never calls ``turn_on`` /
-+        ``set_gains`` / ``set_position_all``, so no joint is energised here —
-+        torque is applied later, explicitly, by the ARMING ramp. The antennas
-+        are likewise *not* constructed now (``Antennas()`` would drive its PWM
-+        pins immediately); they are created lazily on the first real command.
-+
-+        Pass ``actuate=False`` to attach for read-only inspection: no motion
-+        hardware is energised at all (the antennas stay dark even if a stray
-+        command arrives). ``actuate=True`` (the default) still does not move
-+        anything at connect time; it only permits the deferred antenna init to
-+        happen later when an animation actually articulates them.
-+        """
++    def connect(self) -> None:
++        """Lazily import and open every device. Raises if hardware is absent."""
 +        from mini_bdx_runtime.rustypot_position_hwi import HWI
 +        from mini_bdx_runtime.raw_imu import Imu
++        from mini_bdx_runtime.antennas import Antennas
 +        from mini_bdx_runtime.duck_config import DuckConfig
 +
-+        self._actuate = bool(actuate)
 +        cfg = self._duck_config or DuckConfig()
 +        self.hwi = HWI(cfg, self.usb_port)
 +        self.imu = Imu(sampling_freq=50)
-+        # NOTE: antennas are intentionally NOT constructed here (see class /
-+        # set_antennas docstrings) — building Antennas() twitches the servos.
++        self.antennas = Antennas()
 +        if self._enable_eyes:
 +            from mini_bdx_runtime.eyes import Eyes
 +            self.eyes = Eyes()
@@ -5944,31 +5914,8 @@ index 0000000..e90c85e
 +    def torque_off(self) -> None:
 +        self.hwi.turn_off()
 +
-+    def _ensure_antennas(self, left_norm: float, right_norm: float) -> bool:
-+        """Lazily energise the antenna PWM and report whether it is ready.
-+
-+        The first genuine (non-neutral) command constructs :class:`Antennas`
-+        (which drives the pins) — but only if antennas are enabled and this
-+        connection was opened with actuation allowed. A neutral ``(0, 0)``
-+        command on an un-energised antenna is already satisfied (the servo is
-+        passive), so it never powers the pins; that is exactly the "show off"
-+        request the controller issues in BOOT/DISARMED/FAULT via
-+        ``shutdown_show``. The antennas therefore first move only once the FSM
-+        has left DISARMED and an animation actually articulates them, matching
-+        the explicit-consent startup design.
-+        """
-+        if self.antennas is not None:
-+            return True
-+        if not (self._enable_antennas and self._actuate):
-+            return False
-+        if left_norm == 0.0 and right_norm == 0.0:
-+            return False
-+        from mini_bdx_runtime.antennas import Antennas
-+        self.antennas = Antennas()
-+        return True
-+
 +    def set_antennas(self, left_norm: float, right_norm: float) -> None:
-+        if not self._ensure_antennas(left_norm, right_norm):
++        if self.antennas is None:
 +            return
 +        self.antennas.set_position_left(float(left_norm))
 +        self.antennas.set_position_right(float(right_norm))
@@ -6307,10 +6254,10 @@ index 0000000..ddcd134
 +        return status
 diff --git a/scripts/dock_demo.py b/scripts/dock_demo.py
 new file mode 100644
-index 0000000..28e09df
+index 0000000..cd7989e
 --- /dev/null
 +++ b/scripts/dock_demo.py
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,248 @@
 +"""Dock-demo entry point — play a ``.duckanim`` library in DOCK_DEMO, no RL.
 +
 +This is the fastest path to a visible result on the physical robot: it bypasses
@@ -6437,9 +6384,6 @@ index 0000000..28e09df
 +    ap.add_argument("--no-sounds", action="store_true")
 +    ap.add_argument("--no-projector", action="store_true")
 +    ap.add_argument("--no-eyes", action="store_true")
-+    ap.add_argument("--no-antennas", action="store_true",
-+                    help="never energise the antenna PWM (they otherwise move "
-+                         "only once an animation articulates them)")
 +    ap.add_argument("--dry-run", action="store_true",
 +                    help="use the mock robot (no hardware) to smoke-test the loop")
 +    args = ap.parse_args()
@@ -6472,7 +6416,7 @@ index 0000000..28e09df
 +        robot = RealRobot(
 +            usb_port=args.usb_port, sound_directory=args.sound_dir,
 +            enable_sounds=not args.no_sounds, enable_projector=not args.no_projector,
-+            enable_eyes=not args.no_eyes, enable_antennas=not args.no_antennas,
++            enable_eyes=not args.no_eyes,
 +        )
 +        robot.connect()
 +
@@ -7287,6 +7231,346 @@ index 0000000..5375441
 +    assert fsm.engine_mode() is None          # ARMING
 +    fsm.to_fault("x")
 +    assert fsm.engine_mode() is None          # FAULT
+diff --git a/tests/test_safety.py b/tests/test_safety.py
+new file mode 100644
+index 0000000..383a40f
+--- /dev/null
++++ b/tests/test_safety.py
+@@ -0,0 +1,149 @@
++"""Unit tests for the minimum safety set (plan §6.5): watchdogs, thermal/duty,
++e-stop, and the fault-action decision."""
++
++import numpy as np
++import pytest
++
++from mini_bdx_runtime.anim.safety import (
++    SafetyMonitor, SafetyConfig, FaultAction,
++    DeadlineWatchdog, StaleCommandWatchdog, ThermalManager,
++)
++from mini_bdx_runtime.anim.hardware import SensorSnapshot, OperatorInput
++
++
++def snap(t, temps=None, currents=None, **op):
++    return SensorSnapshot(
++        t_monotonic=t, joint_positions=np.zeros(14), joint_velocities=np.zeros(14),
++        tilt_rad=0.0, feet_contacts=np.array([1.0, 1.0]),
++        temperatures_c=temps, currents_a=currents, operator=OperatorInput(**op),
++    )
++
++
++# --- deadline watchdog ------------------------------------------------------
++def test_deadline_tolerates_single_late_tick():
++    wd = DeadlineWatchdog(SafetyConfig())
++    for _ in range(50):
++        assert wd.record(0.02) is None
++    # One late tick within tolerance budget is fine.
++    assert wd.record(0.029) is None
++
++
++def test_deadline_faults_on_consecutive_overruns():
++    cfg = SafetyConfig(deadline_max_consecutive=5)
++    wd = DeadlineWatchdog(cfg)
++    reason = None
++    for _ in range(5):
++        reason = wd.record(0.05)  # way over 0.02*(1.5)=0.03
++    assert reason is not None
++    assert "consecutive" in reason
++
++
++def test_deadline_faults_on_high_miss_rate():
++    cfg = SafetyConfig(deadline_window=20, deadline_max_miss_rate=0.5,
++                       deadline_max_consecutive=1000)
++    wd = DeadlineWatchdog(cfg)
++    reason = None
++    # Alternate hit/miss -> 50% exactly is not > 0.5; make 60% misses.
++    for i in range(20):
++        dur = 0.05 if (i % 5 != 0) else 0.02   # 16/20 misses
++        reason = wd.record(dur)
++    assert reason is not None
++    assert "miss rate" in reason
++
++
++# --- stale-command watchdog -------------------------------------------------
++def test_stale_then_lost():
++    cfg = SafetyConfig(stale_timeout_s=0.5, lost_timeout_s=1.0)
++    wd = StaleCommandWatchdog(cfg)
++    wd.heartbeat(0.0)
++    stale, fault = wd.update(0.2, balancing=True)
++    assert not stale and fault is None
++    stale, fault = wd.update(0.7, balancing=True)
++    assert stale and fault is None      # stale, fall back to idle
++    stale, fault = wd.update(1.5, balancing=True)
++    assert fault is not None            # persistent loss -> fault
++
++
++def test_lost_does_not_fault_in_dock_by_default():
++    cfg = SafetyConfig(stale_timeout_s=0.5, lost_timeout_s=1.0,
++                       lost_faults_in_balancing_only=True)
++    wd = StaleCommandWatchdog(cfg)
++    wd.heartbeat(0.0)
++    stale, fault = wd.update(2.0, balancing=False)   # dock: idle, no fault
++    assert stale and fault is None
++
++
++# --- thermal / duty ---------------------------------------------------------
++def test_thermal_duty_limit_requests_cooldown():
++    cfg = SafetyConfig(max_continuous_load_s=1.0, cooldown_s=0.5)
++    tm = ThermalManager(cfg)
++    cooldown = False
++    for _ in range(60):  # 60 * 0.02 = 1.2s under load
++        _, cooldown = tm.update(snap(0.0), under_load=True, dt=0.02)
++    assert cooldown is True
++
++
++def test_thermal_cooldown_releases_after_decay():
++    cfg = SafetyConfig(max_continuous_load_s=1.0, cooldown_s=0.5,
++                       cooldown_decay_rate=1.0)
++    tm = ThermalManager(cfg)
++    for _ in range(60):
++        tm.update(snap(0.0), under_load=True, dt=0.02)
++    assert tm.cooling
++    # Relieve load; load_time must decay below the release threshold.
++    for _ in range(60):
++        _, cooldown = tm.update(snap(0.0), under_load=False, dt=0.02)
++    assert tm.cooling is False
++
++
++def test_thermal_hard_temp_limit_faults_when_available():
++    cfg = SafetyConfig(temp_limit_c=65.0)
++    tm = ThermalManager(cfg)
++    temps = np.full(14, 70.0)
++    reason, cooldown = tm.update(snap(0.0, temps=temps), under_load=True, dt=0.02)
++    assert reason is not None and "temperature" in reason
++    assert cooldown is True
++
++
++def test_thermal_temp_none_is_time_based_only():
++    tm = ThermalManager(SafetyConfig())
++    reason, _ = tm.update(snap(0.0, temps=None), under_load=True, dt=0.02)
++    assert reason is None
++    assert tm.temp_available is False
++
++
++# --- safety monitor + fault action ------------------------------------------
++def test_estop_sets_fault_with_default_action():
++    mon = SafetyMonitor(SafetyConfig(default_fault_action=FaultAction.CONTROLLED_HOLD))
++    st = mon.update(snap(0.0, estop=True), balancing=True, under_load=True, dt=0.02)
++    assert st.fault and st.estop
++    assert st.fault_action == FaultAction.CONTROLLED_HOLD
++
++
++def test_thermal_fault_forces_torque_off():
++    mon = SafetyMonitor(SafetyConfig(
++        default_fault_action=FaultAction.CONTROLLED_HOLD,
++        thermal_fault_forces_torque_off=True, temp_limit_c=65.0))
++    temps = np.full(14, 80.0)
++    st = mon.update(snap(0.0, temps=temps), balancing=True, under_load=True, dt=0.02)
++    assert st.fault
++    assert st.fault_action == FaultAction.TORQUE_OFF  # thermal overrides hold
++
++
++def test_no_fault_when_healthy():
++    mon = SafetyMonitor(SafetyConfig())
++    mon.heartbeat(0.0)
++    st = mon.update(snap(0.01), balancing=True, under_load=True, dt=0.02,
++                    last_tick_duration_s=0.02)
++    assert not st.fault
++
++
++def test_deadline_via_monitor_faults():
++    cfg = SafetyConfig(deadline_max_consecutive=3)
++    mon = SafetyMonitor(cfg)
++    mon.heartbeat(0.0)
++    st = None
++    for i in range(3):
++        st = mon.update(snap(i * 0.02), balancing=True, under_load=True, dt=0.02,
++                        last_tick_duration_s=0.05)
++    assert st.fault and "deadline" in st.fault_reason
+-- 
+2.53.0
+
+
+From a6ae8f8400ad51af006b870a7bc1c3f558ea4e9f Mon Sep 17 00:00:00 2001
+From: James Clancey <james.clancey@gmail.com>
+Date: Wed, 2 Sep 2026 11:09:36 -0800
+Subject: [PATCH 2/3] anim: make connecting to the robot non-actuating (defer
+ antenna init)
+
+RealRobot.connect() constructed Antennas() unconditionally, and that
+constructor immediately drives the D13/D12 PWM pins, so simply connecting
+to the robot twitched the antennas before any clip played and before the
+operator had armed anything. That made "connect and inspect" impossible
+without motion, prevented a diagnostic tool from safely attaching, and
+contradicted the rest of the FSM design, where motion is explicit and
+consented-to (BOOT/DISARMED holds still; ARMING ramps from the measured
+pose).
+
+Antennas are now constructed lazily, on the first genuine non-neutral
+set_antennas() command. The controller only issues those from _drive_show
+in the operational modes (DOCK_DEMO/STAND/WALK), so the pins are energised
+only once the FSM has actually left DISARMED, which is exactly the design
+intent. The neutral (0,0) "show off" command that shutdown_show() issues in
+BOOT/DISARMED/FAULT is treated as already satisfied on a passive antenna and
+never powers the pins. connect() also documents that it opens the bus and
+IMU passively: it never calls turn_on/set_kps/set_position_all, so no leg or
+head servo is torqued on at connect time; torque is applied later, only by
+the ARMING ramp.
+
+Adds an explicit opt-out at two levels: RealRobot(enable_antennas=False)
+to disable antennas entirely, and connect(actuate=False) for a read-only
+inspection attach that energises no motion hardware at all. dock_demo.py
+gains a matching --no-antennas flag alongside the existing --no-eyes etc.
+The mock path is unchanged and stays consistent, since MockRobot.set_antennas
+only records commands and never touches hardware.
+
+tests/test_real_robot.py proves, against injected device spies (no hardware),
+that constructing and connecting never energise the antenna PWM or torque the
+bus, that a neutral command stays dark, that the first real command energises
+and drives the antennas exactly once, and that enable_antennas=False /
+connect(actuate=False) keep them dark unconditionally.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+---
+ .../mini_bdx_runtime/anim/real_robot.py       |  65 ++++++-
+ scripts/dock_demo.py                          |   5 +-
+ tests/test_real_robot.py                      | 183 ++++++++++++++++++
+ 3 files changed, 245 insertions(+), 8 deletions(-)
+ create mode 100644 tests/test_real_robot.py
+
+diff --git a/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py b/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
+index 981f9ea..e90c85e 100644
+--- a/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
++++ b/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
+@@ -12,7 +12,14 @@ Mapping to the existing runtime devices (unchanged, we only adapt them):
+ * tilt                -> ``raw_imu.Imu`` accelerometer gravity estimate (the
+   runtime IMU exposes only gyro+accel, no orientation quaternion, so we derive
+   the tilt-from-vertical angle here and document it)
+-* antennas            -> ``antennas.Antennas`` (PWM D13 left +1 / D12 right -1)
++* antennas            -> ``antennas.Antennas`` (PWM D13 left +1 / D12 right -1).
++  ``Antennas()`` drives the PWM pins the instant it is constructed, so it is
++  **not** built in ``connect``. It is created lazily the first time a genuine
++  (non-neutral) antenna command is issued, which only happens once the FSM has
++  left ``DISARMED`` and an animation actually articulates the antennas. Merely
++  connecting — or holding in ``BOOT``/``DISARMED``/``FAULT`` — never energises
++  the antenna pins. Pass ``enable_antennas=False`` (or ``connect(actuate=False)``
++  for a read-only inspection attach) to keep the antennas dark unconditionally.
+ * eyes                -> ``eyes.Eyes`` (its auto-blink thread is stopped so the
+   animation eye track has exclusive control)
+ * sounds              -> ``sounds.Sounds``
+@@ -62,13 +69,19 @@ class RealRobot(RobotInterface):
+ 
+     def __init__(self, duck_config=None, usb_port: str = "/dev/ttyACM0",
+                  sound_directory: str = "./", enable_sounds: bool = True,
+-                 enable_projector: bool = True, enable_eyes: bool = True):
++                 enable_projector: bool = True, enable_eyes: bool = True,
++                 enable_antennas: bool = True):
+         self.usb_port = usb_port
+         self._duck_config = duck_config
+         self._sound_directory = sound_directory
+         self._enable_sounds = enable_sounds
+         self._enable_projector = enable_projector
+         self._enable_eyes = enable_eyes
++        self._enable_antennas = enable_antennas
++        # Whether this connection is allowed to energise motion hardware. Set by
++        # connect(actuate=...). Defaults to False until connect() runs so a
++        # freshly-constructed (never connected) adapter never actuates.
++        self._actuate = False
+ 
+         self.hwi = None
+         self.imu = None
+@@ -78,17 +91,32 @@ class RealRobot(RobotInterface):
+         self.projector = None
+         self._connected = False
+ 
+-    def connect(self) -> None:
+-        """Lazily import and open every device. Raises if hardware is absent."""
++    def connect(self, actuate: bool = True) -> None:
++        """Lazily import and open every device. Raises if hardware is absent.
++
++        Opening the bus (``HWI``) and the IMU is **read-capable but passive**:
++        the servos come up torque-off and ``connect`` never calls ``turn_on`` /
++        ``set_gains`` / ``set_position_all``, so no joint is energised here —
++        torque is applied later, explicitly, by the ARMING ramp. The antennas
++        are likewise *not* constructed now (``Antennas()`` would drive its PWM
++        pins immediately); they are created lazily on the first real command.
++
++        Pass ``actuate=False`` to attach for read-only inspection: no motion
++        hardware is energised at all (the antennas stay dark even if a stray
++        command arrives). ``actuate=True`` (the default) still does not move
++        anything at connect time; it only permits the deferred antenna init to
++        happen later when an animation actually articulates them.
++        """
+         from mini_bdx_runtime.rustypot_position_hwi import HWI
+         from mini_bdx_runtime.raw_imu import Imu
+-        from mini_bdx_runtime.antennas import Antennas
+         from mini_bdx_runtime.duck_config import DuckConfig
+ 
++        self._actuate = bool(actuate)
+         cfg = self._duck_config or DuckConfig()
+         self.hwi = HWI(cfg, self.usb_port)
+         self.imu = Imu(sampling_freq=50)
+-        self.antennas = Antennas()
++        # NOTE: antennas are intentionally NOT constructed here (see class /
++        # set_antennas docstrings) — building Antennas() twitches the servos.
+         if self._enable_eyes:
+             from mini_bdx_runtime.eyes import Eyes
+             self.eyes = Eyes()
+@@ -152,8 +180,31 @@ class RealRobot(RobotInterface):
+     def torque_off(self) -> None:
+         self.hwi.turn_off()
+ 
++    def _ensure_antennas(self, left_norm: float, right_norm: float) -> bool:
++        """Lazily energise the antenna PWM and report whether it is ready.
++
++        The first genuine (non-neutral) command constructs :class:`Antennas`
++        (which drives the pins) — but only if antennas are enabled and this
++        connection was opened with actuation allowed. A neutral ``(0, 0)``
++        command on an un-energised antenna is already satisfied (the servo is
++        passive), so it never powers the pins; that is exactly the "show off"
++        request the controller issues in BOOT/DISARMED/FAULT via
++        ``shutdown_show``. The antennas therefore first move only once the FSM
++        has left DISARMED and an animation actually articulates them, matching
++        the explicit-consent startup design.
++        """
++        if self.antennas is not None:
++            return True
++        if not (self._enable_antennas and self._actuate):
++            return False
++        if left_norm == 0.0 and right_norm == 0.0:
++            return False
++        from mini_bdx_runtime.antennas import Antennas
++        self.antennas = Antennas()
++        return True
++
+     def set_antennas(self, left_norm: float, right_norm: float) -> None:
+-        if self.antennas is None:
++        if not self._ensure_antennas(left_norm, right_norm):
+             return
+         self.antennas.set_position_left(float(left_norm))
+         self.antennas.set_position_right(float(right_norm))
+diff --git a/scripts/dock_demo.py b/scripts/dock_demo.py
+index cd7989e..28e09df 100644
+--- a/scripts/dock_demo.py
++++ b/scripts/dock_demo.py
+@@ -124,6 +124,9 @@ def main():
+     ap.add_argument("--no-sounds", action="store_true")
+     ap.add_argument("--no-projector", action="store_true")
+     ap.add_argument("--no-eyes", action="store_true")
++    ap.add_argument("--no-antennas", action="store_true",
++                    help="never energise the antenna PWM (they otherwise move "
++                         "only once an animation articulates them)")
+     ap.add_argument("--dry-run", action="store_true",
+                     help="use the mock robot (no hardware) to smoke-test the loop")
+     args = ap.parse_args()
+@@ -156,7 +159,7 @@ def main():
+         robot = RealRobot(
+             usb_port=args.usb_port, sound_directory=args.sound_dir,
+             enable_sounds=not args.no_sounds, enable_projector=not args.no_projector,
+-            enable_eyes=not args.no_eyes,
++            enable_eyes=not args.no_eyes, enable_antennas=not args.no_antennas,
+         )
+         robot.connect()
+ 
 diff --git a/tests/test_real_robot.py b/tests/test_real_robot.py
 new file mode 100644
 index 0000000..26d1832
@@ -7476,161 +7760,897 @@ index 0000000..26d1832
 +    robot.set_antennas(0.9, -0.9)
 +    assert robot.antennas is None
 +    assert _SpyAntennas.instances == 0
-diff --git a/tests/test_safety.py b/tests/test_safety.py
-new file mode 100644
-index 0000000..383a40f
---- /dev/null
-+++ b/tests/test_safety.py
-@@ -0,0 +1,149 @@
-+"""Unit tests for the minimum safety set (plan §6.5): watchdogs, thermal/duty,
-+e-stop, and the fault-action decision."""
+-- 
+2.53.0
+
+
+From 719050053dbc9099e254093d35e5b3fd52c56f10 Mon Sep 17 00:00:00 2001
+From: James Clancey <james.clancey@gmail.com>
+Date: Wed, 2 Sep 2026 12:21:52 -0800
+Subject: [PATCH 3/3] anim: recover hardware-validated eye + IMU fixes from
+ robot bring-up
+
+Recovers fixes made directly on the robot's SD card during physical
+bring-up (Open Duck Mini v2), which existed nowhere in version control.
+
+Eyes (two bugs the hardware caught but unit tests didn't):
+- connect() built Eyes() then called eyes.stop(), which deinitialised the
+  GPIO pins; every later set_eyes() wrote to dead pins and the swallowed
+  exception meant the eyes never lit. connect() no longer stops the eyes.
+- _drive_show() handled sound/projector events but silently dropped "eye"
+  events, so clip cues (wide/blink/happy) never reached hardware. It now
+  routes eye events via set_eye_event (getattr, mock-safe).
+- eyes.py rewritten: single background thread owns a natural idle blink
+  (lit baseline; 0.12 s dark flicks; uniform 2-6 s interval; ~18% double)
+  with thread-safe cues (blink/double_blink/hold_open) and note_authored
+  (a 1->0 authored edge = a blink, no longer forcing the eyes dark). Clip
+  cues take precedence over the idle loop, then idle resumes.
+- real_robot.set_eyes -> note_authored; new set_eye_event maps cues to hw.
+
+IMU made optional, but ONLY for non-balancing paths:
+- connect() tolerates an unavailable BNO055 (try/except -> imu=None) with a
+  loud warning, so the dock / head-only demo runs on a bench without I2C.
+- Safety fix (gap found during recovery): read() now reports tilt_valid so
+  a zero placeholder tilt can't be mistaken for "upright". STAND/WALK refuse
+  to enter, and latch FAULT if entered, without valid tilt sensing; only
+  DOCK_DEMO/head paths may run IMU-less.
+
+Tests (+16, 55 -> 71): connect() leaves eyes usable; an eye event reaches
+the device through _drive_show; blink composition (cue precedes idle, then
+idle resumes); IMU-optional tilt_valid gating across the FSM. All proven to
+fail against the pre-fix code.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ .../mini_bdx_runtime/anim/controller.py       |   8 +-
+ mini_bdx_runtime/mini_bdx_runtime/anim/fsm.py |  27 ++++
+ .../mini_bdx_runtime/anim/hardware.py         |   9 ++
+ .../mini_bdx_runtime/anim/real_robot.py       |  58 ++++++-
+ mini_bdx_runtime/mini_bdx_runtime/eyes.py     | 135 ++++++++++++++--
+ tests/test_controller.py                      |  44 +++++
+ tests/test_eyes.py                            | 152 ++++++++++++++++++
+ tests/test_fsm.py                             |  54 ++++++-
+ tests/test_real_robot.py                      | 125 ++++++++++++++
+ 9 files changed, 586 insertions(+), 26 deletions(-)
+ create mode 100644 tests/test_eyes.py
+
+diff --git a/mini_bdx_runtime/mini_bdx_runtime/anim/controller.py b/mini_bdx_runtime/mini_bdx_runtime/anim/controller.py
+index 7fc2e2a..d744095 100644
+--- a/mini_bdx_runtime/mini_bdx_runtime/anim/controller.py
++++ b/mini_bdx_runtime/mini_bdx_runtime/anim/controller.py
+@@ -467,10 +467,16 @@ class AnimationController:
+         out.antennas = (float(slewed[0]), float(slewed[1]))
+         # Eyes.
+         self.robot.set_eyes(int(show.eyes))
+-        # Discrete events -> sounds / projector (never rate-limited).
++        # Discrete events -> sounds / projector / eyes (never rate-limited).
+         for ev in show.events:
+             if ev.type == "sound":
+                 self.robot.play_sound(ev.value)
+             elif ev.type == "projector":
+                 self.robot.set_projector(ev.value in ("on", "1", "true", "True"))
++            elif ev.type == "eye":
++                # Expressive eye cue (wide/blink/happy). Optional on the robot
++                # interface: only RealRobot implements it, mocks simply skip.
++                fn = getattr(self.robot, "set_eye_event", None)
++                if fn is not None:
++                    fn(ev.value)
+             out.events_fired.append(ev)
+diff --git a/mini_bdx_runtime/mini_bdx_runtime/anim/fsm.py b/mini_bdx_runtime/mini_bdx_runtime/anim/fsm.py
+index d453296..fcb72c8 100644
+--- a/mini_bdx_runtime/mini_bdx_runtime/anim/fsm.py
++++ b/mini_bdx_runtime/mini_bdx_runtime/anim/fsm.py
+@@ -31,6 +31,13 @@ Tilt during OPERATIONAL modes uses a looser bound (``operational_tilt_rad``,
+ default 0.15 rad = the plan's Phase-4 acceptance bound) so normal walking sway
+ does not fault; the tight 0.10 rad guard governs the ARMING->operational
+ handoff, when the robot should be quiescent.
 +
-+import numpy as np
++Balancing modes require **valid tilt sensing**: when the IMU is unavailable the
++on-robot adapter reports ``SensorSnapshot.tilt_valid = False`` (with a zero
++placeholder ``tilt_rad`` that must NOT be read as "upright"). The non-balancing
++DOCK_DEMO / head-only path may run with it False, but STAND and WALK cannot be
++entered — and are latched to FAULT if it goes False — so the robot never
++balances blind on a fake zero tilt.
+ """
+ 
+ from dataclasses import dataclass, field
+@@ -292,6 +299,12 @@ class ModeFSM:
+         if op.dock_confirmed:
+             self._enter_operational(FSMState.DOCK_DEMO)
+         elif op.offdock_confirmed:
++            # STAND is a balancing mode: never enter it without real tilt sensing.
++            # (With no IMU, snap.tilt_rad is a zero placeholder, not "upright".)
++            if not snap.tilt_valid:
++                self.to_fault("cannot enter STAND: no valid tilt/IMU "
++                              "(balance sensing required to leave the dock)")
++                return
+             self._enter_operational(FSMState.STAND)
+         # else: hold in ARMING (armed, waiting for a destination confirmation).
+ 
+@@ -300,6 +313,11 @@ class ModeFSM:
+         self._reset_guards(inside=False)
+ 
+     def _step_stand(self, snap, commanded_targets, dt: float, op: OperatorInput) -> None:
++        # Balance sensing is mandatory in STAND: a lost/absent IMU makes tilt a
++        # meaningless zero, so latch FAULT rather than balance blind.
++        if not snap.tilt_valid:
++            self.to_fault("STAND requires valid tilt/IMU (balance sensing lost)")
++            return
+         # Operational tilt fault (looser bound).
+         if snap.tilt_rad > self.cfg.operational_tilt_rad:
+             self.to_fault("tilt %.3f rad > operational bound %.3f"
+@@ -317,6 +335,10 @@ class ModeFSM:
+                 self._enter_operational(FSMState.DOCK_DEMO)
+ 
+     def _step_walk(self, snap, op: OperatorInput) -> None:
++        # Balance sensing is mandatory in WALK too (see _step_stand).
++        if not snap.tilt_valid:
++            self.to_fault("WALK requires valid tilt/IMU (balance sensing lost)")
++            return
+         if snap.tilt_rad > self.cfg.operational_tilt_rad:
+             self.to_fault("tilt %.3f rad > operational bound %.3f"
+                           % (snap.tilt_rad, self.cfg.operational_tilt_rad))
+@@ -328,6 +350,11 @@ class ModeFSM:
+     def _step_dock(self, snap, commanded_targets, dt: float, op: OperatorInput) -> None:
+         # DOCK_DEMO -> STAND on off-dock confirm AND guards G.
+         if op.offdock_confirmed:
++            # Leaving the dock enters a balancing mode; require real tilt sensing.
++            if not snap.tilt_valid:
++                self.to_fault("cannot leave dock for STAND: no valid tilt/IMU "
++                              "(balance sensing required)")
++                return
+             if self._guards_hold(snap, commanded_targets, dt,
+                                  tilt_thr=self.cfg.arming_tilt_rad,
+                                  require_both_feet=True):
+diff --git a/mini_bdx_runtime/mini_bdx_runtime/anim/hardware.py b/mini_bdx_runtime/mini_bdx_runtime/anim/hardware.py
+index ea80c9b..5749735 100644
+--- a/mini_bdx_runtime/mini_bdx_runtime/anim/hardware.py
++++ b/mini_bdx_runtime/mini_bdx_runtime/anim/hardware.py
+@@ -84,6 +84,11 @@ class SensorSnapshot:
+     joint_velocities: np.ndarray            # (14,) rad/s, bus order
+     tilt_rad: float                         # roll/pitch magnitude from vertical
+     feet_contacts: np.ndarray               # (2,) [left, right] in {0,1}
++    # Whether ``tilt_rad`` reflects a real tilt measurement. False means the IMU
++    # was unavailable and ``tilt_rad`` is a zero placeholder — it must NOT be
++    # trusted as "upright". Balancing modes (STAND/WALK) require this True; the
++    # non-balancing DOCK_DEMO / head-only path may run with it False.
++    tilt_valid: bool = True
+     gyro: np.ndarray = field(default_factory=lambda: np.zeros(3))
+     accelero: np.ndarray = field(default_factory=lambda: np.zeros(3))
+     temperatures_c: Optional[np.ndarray] = None   # (14,) or None if unsupported
+@@ -168,6 +173,7 @@ class MockRobot(RobotInterface):
+         self.target_history: List[np.ndarray] = []
+         self.antenna_history: List[Tuple[float, float]] = []
+         self.eye_history: List[int] = []
++        self.eye_event_history: List[str] = []
+         self.sound_history: List[str] = []
+         self.projector_state: bool = False
+         self.projector_history: List[bool] = []
+@@ -209,6 +215,9 @@ class MockRobot(RobotInterface):
+     def set_eyes(self, state: int) -> None:
+         self.eye_history.append(int(state))
+ 
++    def set_eye_event(self, value: str) -> None:
++        self.eye_event_history.append(str(value))
++
+     def play_sound(self, name: str) -> None:
+         self.sound_history.append(str(name))
+ 
+diff --git a/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py b/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
+index e90c85e..9278c11 100644
+--- a/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
++++ b/mini_bdx_runtime/mini_bdx_runtime/anim/real_robot.py
+@@ -114,18 +114,27 @@ class RealRobot(RobotInterface):
+         self._actuate = bool(actuate)
+         cfg = self._duck_config or DuckConfig()
+         self.hwi = HWI(cfg, self.usb_port)
+-        self.imu = Imu(sampling_freq=50)
++        # The IMU is required for balance (STAND/WALK) but not for the dock demo
++        # (legs are simply held at init_pos). If the IMU can't be constructed —
++        # e.g. I2C is disabled on the host — degrade gracefully: ``read`` already
++        # falls back to a zero gyro/accel snapshot (tilt=0). This keeps the
++        # head-animation / dock path usable on a bench without an IMU. STAND/WALK
++        # must NOT be entered with ``self.imu is None`` (no balance feedback).
++        try:
++            self.imu = Imu(sampling_freq=50)
++        except Exception as err:
++            self.imu = None
++            print("[RealRobot] WARNING: IMU unavailable (%s) — running without "
++                  "balance sensing. Dock/head-only OK; do NOT stand or walk." % err)
+         # NOTE: antennas are intentionally NOT constructed here (see class /
+         # set_antennas docstrings) — building Antennas() twitches the servos.
+         if self._enable_eyes:
+             from mini_bdx_runtime.eyes import Eyes
++            # Eyes own a background idle-blink thread; expressive clip eye cues
++            # override it via set_eyes / set_eye_event. (Previously the thread was
++            # stopped here, which also deinitialised the pins and left the eyes
++            # dark — the animation eye track never reached the hardware.)
+             self.eyes = Eyes()
+-            # Take exclusive control of the eye pins: stop the auto-blink thread
+-            # so the animation eye track is authoritative.
+-            try:
+-                self.eyes.stop()
+-            except Exception:
+-                pass
+         if self._enable_sounds:
+             from mini_bdx_runtime.sounds import Sounds
+             self.sounds = Sounds(volume=1.0, sound_directory=self._sound_directory)
+@@ -142,6 +151,11 @@ class RealRobot(RobotInterface):
+         vel = self.hwi.get_present_velocities()
+         if vel is None or len(vel) != N_DOFS:
+             vel = np.zeros(N_DOFS, dtype=np.float64)
++        # Tilt is only meaningful if the IMU is present AND this read succeeded.
++        # With no IMU (self.imu is None) get_data() raises and we fall back to a
++        # zero snapshot — tilt_rad=0 then does NOT mean "upright", so mark it
++        # invalid so the FSM refuses to enter/stay in a balancing mode on it.
++        tilt_valid = self.imu is not None
+         try:
+             imu_data = self.imu.get_data()
+             accel = np.asarray(imu_data["accelero"], dtype=np.float64)
+@@ -149,12 +163,14 @@ class RealRobot(RobotInterface):
+         except Exception:
+             accel = np.zeros(3)
+             gyro = np.zeros(3)
++            tilt_valid = False
+         tilt = _tilt_from_accel(accel)
+         return SensorSnapshot(
+             t_monotonic=time.monotonic(),
+             joint_positions=np.asarray(pos, dtype=np.float64),
+             joint_velocities=np.asarray(vel, dtype=np.float64),
+             tilt_rad=tilt,
++            tilt_valid=tilt_valid,
+             # No dedicated foot-contact sensor on this build; DOCK_DEMO holds the
+             # legs, so we report "both feet" (the dock supports the robot). This
+             # is only consumed by the STAND/dock-handoff guard, which the demo
+@@ -210,10 +226,36 @@ class RealRobot(RobotInterface):
+         self.antennas.set_position_right(float(right_norm))
+ 
+     def set_eyes(self, state: int) -> None:
++        """Route the per-frame authored eye channel to the eyes. Baseline
++        lighting + idle blinking are owned by the Eyes background thread; a
++        1->0 edge in the authored channel is treated as an authored blink so a
++        clip with a steady/absent eye channel does not force the eyes dark."""
++        if self.eyes is None:
++            return
++        try:
++            self.eyes.note_authored(int(state))
++        except Exception:
++            pass
++
++    def set_eye_event(self, value: str) -> None:
++        """Apply a discrete expressive eye cue from a clip show event.
++
++        Maps the authored cue vocabulary onto the on/off LED hardware:
++        ``blink`` -> one blink, ``happy`` -> quick double-blink, ``wide`` /
++        ``startle`` -> hold the eyes wide (suppress blinking) briefly. Unknown
++        cues fall back to a single blink."""
+         if self.eyes is None:
+             return
++        v = str(value).lower()
+         try:
+-            self.eyes._set_eyes(bool(state))
++            if v in ("wide", "startle", "alert", "open"):
++                self.eyes.hold_open(1.0)
++            elif v in ("happy", "double", "double_blink"):
++                self.eyes.double_blink()
++            elif v in ("blink", "close", "closed"):
++                self.eyes.blink()
++            else:
++                self.eyes.blink()
+         except Exception:
+             pass
+ 
+diff --git a/mini_bdx_runtime/mini_bdx_runtime/eyes.py b/mini_bdx_runtime/mini_bdx_runtime/eyes.py
+index b07446b..40bc97e 100644
+--- a/mini_bdx_runtime/mini_bdx_runtime/eyes.py
++++ b/mini_bdx_runtime/mini_bdx_runtime/eyes.py
+@@ -1,51 +1,157 @@
++"""Eye lights for Open Duck Mini v2.
++
++Two digital LED channels (``board.D24`` left, ``board.D23`` right). The eyes are
++lit (open) as the resting state and *blink* by going briefly dark. A background
++thread produces a natural, irregular idle blink; expressive clip cues override it.
++
++Design (matches the three-layer engine's background/triggered model):
++
++* **Background idle blink** — the resting behaviour. Blink interval is random in
++  ``[min_interval, max_interval]`` (default 2-6 s) so it never looks metronomic,
++  with an occasional spontaneous double-blink. This runs whenever the eyes exist.
++* **Triggered overrides take precedence** — a clip eye event nudges the eyes:
++  ``blink`` (one blink now), ``double_blink`` (two quick blinks, e.g. "happy"),
++  ``hold_open(seconds)`` (suppress blinking and stay wide, e.g. "startle"/"wide").
++  The per-frame authored eye channel is honoured via :meth:`note_authored` (a
++  1->0 edge = an authored blink).
++
++ALL pin writes happen on the single background thread, so external callers only
++set thread-safe flags — there is never a cross-thread race on the LEDs.
++"""
++
+ import board
+ import digitalio
+ import random
+ import time
+-from threading import Thread, Event
++from threading import Thread, Event, Lock
+ 
+ LEFT_EYE_PIN = board.D24
+ RIGHT_EYE_PIN = board.D23
+ 
+ 
+ class Eyes:
+-    def __init__(self, blink_duration=0.1, min_interval=1.0, max_interval=4.0):
++    def __init__(self, blink_duration=0.12, min_interval=2.0, max_interval=6.0,
++                 double_blink_prob=0.18, double_gap=0.16):
+         self.left_eye = digitalio.DigitalInOut(LEFT_EYE_PIN)
+         self.left_eye.direction = digitalio.Direction.OUTPUT
+-
+         self.right_eye = digitalio.DigitalInOut(RIGHT_EYE_PIN)
+         self.right_eye.direction = digitalio.Direction.OUTPUT
+ 
+         self.blink_duration = blink_duration
+         self.min_interval = min_interval
+         self.max_interval = max_interval
++        self.double_blink_prob = double_blink_prob
++        self.double_gap = double_gap
++
++        self._lock = Lock()
++        self._blink_requests = 0        # pending explicit blinks (expressive cues)
++        self._hold_until = 0.0          # monotonic time to suppress auto-blink until
++        self._authored_prev = 1         # last per-frame authored eye state (1=open)
++        self._lit = False
+ 
+         self._stop_event = Event()
++        self._set_eyes(True)            # resting state: eyes open/lit
++        self._next_auto = time.monotonic() + self._rand_interval()
+         self._thread = Thread(target=self.run, daemon=True)
+         self._thread.start()
+ 
++    # -- low level -----------------------------------------------------------
++    def _rand_interval(self):
++        return random.uniform(self.min_interval, self.max_interval)
++
+     def _set_eyes(self, state):
+-        self.left_eye.value = state
+-        self.right_eye.value = state
++        s = bool(state)
++        self.left_eye.value = s
++        self.right_eye.value = s
++        self._lit = s
++
++    def _do_blink(self):
++        self._set_eyes(False)
++        time.sleep(self.blink_duration)
++        self._set_eyes(True)
+ 
++    # -- thread-safe public cues (called from the control loop) --------------
++    def blink(self, n=1):
++        """Request ``n`` explicit blink(s) as soon as possible."""
++        with self._lock:
++            self._blink_requests += max(1, int(n))
++
++    def double_blink(self):
++        """A quick two-blink flutter (e.g. a 'happy' cue)."""
++        with self._lock:
++            self._blink_requests += 2
++
++    def hold_open(self, seconds=1.0):
++        """Suppress idle blinking and keep the eyes wide for ``seconds`` (e.g.
++        'startle'/'wide')."""
++        with self._lock:
++            self._hold_until = max(self._hold_until, time.monotonic() + float(seconds))
++            self._blink_requests = 0
++        self._set_eyes(True)
++
++    def note_authored(self, state):
++        """Honour a clip's per-frame eye channel: a 1->0 edge is an authored
++        blink. Baseline lighting is owned by the background loop, so a steady
++        value (e.g. a clip with no eye channel) does not force the eyes dark."""
++        s = int(bool(state))
++        with self._lock:
++            edge = (self._authored_prev == 1 and s == 0)
++            self._authored_prev = s
++            if edge:
++                self._blink_requests += 1
++
++    def set_manual(self, state):
++        """Explicit momentary hold of a raw eye state (rarely needed)."""
++        with self._lock:
++            self._hold_until = time.monotonic() + 0.25
++        self._set_eyes(bool(state))
++
++    # -- background loop -----------------------------------------------------
+     def run(self):
+         try:
+             while not self._stop_event.is_set():
+-                self._set_eyes(False)
+-                time.sleep(self.blink_duration)
+-                self._set_eyes(True)
+-                next_blink = random.uniform(self.min_interval, self.max_interval)
+-                time.sleep(next_blink)
++                now = time.monotonic()
++                with self._lock:
++                    req = self._blink_requests
++                    self._blink_requests = 0
++                    holding = now < self._hold_until
++                if holding:
++                    if not self._lit:
++                        self._set_eyes(True)
++                elif req > 0:
++                    self._do_blink()
++                    if req >= 2:
++                        time.sleep(self.double_gap)
++                        self._do_blink()
++                    with self._lock:
++                        self._next_auto = time.monotonic() + self._rand_interval()
++                elif now >= self._next_auto:
++                    self._do_blink()
++                    if random.random() < self.double_blink_prob:
++                        time.sleep(self.double_gap)
++                        self._do_blink()
++                    with self._lock:
++                        self._next_auto = time.monotonic() + self._rand_interval()
++                else:
++                    if not self._lit:
++                        self._set_eyes(True)
++                self._stop_event.wait(0.02)
+         except Exception as err:
+             print(f"Error in eye thread: {err}")
+             self._stop_event.set()
+ 
+     def stop(self):
+         self._stop_event.set()
+-        self._thread.join()
+-        self._set_eyes(False)
+-        self.left_eye.deinit()
+-        self.right_eye.deinit()
++        try:
++            self._thread.join(timeout=1.0)
++        except Exception:
++            pass
++        try:
++            self._set_eyes(False)
++            self.left_eye.deinit()
++            self.right_eye.deinit()
++        except Exception:
++            pass
+ 
+ 
+ if __name__ == "__main__":
+@@ -55,4 +161,3 @@ if __name__ == "__main__":
+             time.sleep(1)
+     finally:
+         e.stop()
+-
+diff --git a/tests/test_controller.py b/tests/test_controller.py
+index f128f52..7200159 100644
+--- a/tests/test_controller.py
++++ b/tests/test_controller.py
+@@ -242,3 +242,47 @@ def test_make_head_engine_none_derating_uses_full_envelope():
+     d = abs(float(np.asarray(derated.evaluate(0.02, "walk", trg).head_command_offsets)[2]))
+     f = abs(float(np.asarray(full.evaluate(0.02, "walk", trg).head_command_offsets)[2]))
+     assert f > d  # full envelope allows a larger deflection than derated
++
++
++# --- eye events reach the device through _drive_show (regression for bug #2) --
++def test_eye_event_in_show_reaches_device_via_drive_show():
++    """_drive_show used to handle only 'sound' and 'projector' events and
++    silently drop 'eye' events, so clip eye cues (wide/blink/happy) never reached
++    the hardware. An 'eye' event authored in a clip's show_functions.events must
++    now be routed to the robot's set_eye_event."""
++    import types
++    from open_duck_anim import TickShow, DiscreteEvent
++
++    robot, c = make()
++    show = TickShow(
++        antenna_l=0.0, antenna_r=0.0, eyes=1,
++        events=[DiscreteEvent(frame=0, type="eye", value="wide")],
++    )
++    engine_out = types.SimpleNamespace(show=show)
++    out = types.SimpleNamespace(antennas=None, events_fired=[])
++    c._drive_show(engine_out, out)
++    # The eye cue reached the device and the event was recorded as fired.
++    assert robot.eye_event_history == ["wide"]
++    assert [ev.type for ev in out.events_fired] == ["eye"]
++
++
++def test_mixed_show_events_route_to_correct_channels():
++    """sound/projector/eye events each go to their own channel, in order."""
++    import types
++    from open_duck_anim import TickShow, DiscreteEvent
++
++    robot, c = make()
++    show = TickShow(
++        antenna_l=0.0, antenna_r=0.0, eyes=1,
++        events=[
++            DiscreteEvent(frame=0, type="sound", value="beep"),
++            DiscreteEvent(frame=0, type="eye", value="blink"),
++            DiscreteEvent(frame=0, type="projector", value="on"),
++        ],
++    )
++    engine_out = types.SimpleNamespace(show=show)
++    out = types.SimpleNamespace(antennas=None, events_fired=[])
++    c._drive_show(engine_out, out)
++    assert robot.sound_history == ["beep"]
++    assert robot.eye_event_history == ["blink"]
++    assert robot.projector_state is True
+diff --git a/tests/test_eyes.py b/tests/test_eyes.py
+new file mode 100644
+index 0000000..8cc4586
+--- /dev/null
++++ b/tests/test_eyes.py
+@@ -0,0 +1,152 @@
++"""Composition tests for the eye background/idle blink logic.
++
++The real :class:`mini_bdx_runtime.eyes.Eyes` drives two GPIO pins via CircuitPython
++``board``/``digitalio``. Those aren't present off-robot, so we inject tiny fakes
++that record every pin transition, then exercise the *real* Eyes background thread
++to prove the three-layer composition the hardware validated:
++
++* eyes are lit at baseline,
++* an expressive clip cue takes precedence over the idle loop (``hold_open``
++  suppresses idle blinking; ``blink`` injects one immediately), and
++* the idle blink resumes automatically once the cue window passes.
++"""
++
++import sys
++import time
++import types
++
 +import pytest
 +
-+from mini_bdx_runtime.anim.safety import (
-+    SafetyMonitor, SafetyConfig, FaultAction,
-+    DeadlineWatchdog, StaleCommandWatchdog, ThermalManager,
-+)
-+from mini_bdx_runtime.anim.hardware import SensorSnapshot, OperatorInput
++
++class _FakePin:
++    def __init__(self, name):
++        self.name = name
++        self.value = None
++        self.direction = None
++        self.deinited = False
++        self.transitions = []  # (monotonic, bool) each time value is written
++
++    # digitalio.DigitalInOut(pin) stores the pin; value is a property in the
++    # real lib, but a plain attribute works for our recording needs via a
++    # wrapper below.
 +
 +
-+def snap(t, temps=None, currents=None, **op):
-+    return SensorSnapshot(
-+        t_monotonic=t, joint_positions=np.zeros(14), joint_velocities=np.zeros(14),
-+        tilt_rad=0.0, feet_contacts=np.array([1.0, 1.0]),
-+        temperatures_c=temps, currents_a=currents, operator=OperatorInput(**op),
-+    )
++class _RecordingDIO:
++    """Stand-in for digitalio.DigitalInOut that records value transitions."""
++
++    def __init__(self, pin):
++        self._pin = pin
++        self.direction = None
++
++    @property
++    def value(self):
++        return self._pin.value
++
++    @value.setter
++    def value(self, v):
++        self._pin.value = bool(v)
++        self._pin.transitions.append((time.monotonic(), bool(v)))
++
++    def deinit(self):
++        self._pin.deinited = True
 +
 +
-+# --- deadline watchdog ------------------------------------------------------
-+def test_deadline_tolerates_single_late_tick():
-+    wd = DeadlineWatchdog(SafetyConfig())
-+    for _ in range(50):
-+        assert wd.record(0.02) is None
-+    # One late tick within tolerance budget is fine.
-+    assert wd.record(0.029) is None
++@pytest.fixture
++def eyes_module(monkeypatch):
++    """Inject fake board/digitalio and import a fresh Eyes each test."""
++    left = _FakePin("D24")
++    right = _FakePin("D23")
++
++    board = types.ModuleType("board")
++    board.D24 = left
++    board.D23 = right
++
++    digitalio = types.ModuleType("digitalio")
++    digitalio.DigitalInOut = _RecordingDIO
++    direction = types.SimpleNamespace(OUTPUT="output", INPUT="input")
++    digitalio.Direction = direction
++
++    monkeypatch.setitem(sys.modules, "board", board)
++    monkeypatch.setitem(sys.modules, "digitalio", digitalio)
++    # Force a fresh import so module-level board.D24/D23 bind to our fakes.
++    monkeypatch.delitem(sys.modules, "mini_bdx_runtime.eyes", raising=False)
++    import mini_bdx_runtime.eyes as eyes_mod
++    yield eyes_mod, left, right
 +
 +
-+def test_deadline_faults_on_consecutive_overruns():
-+    cfg = SafetyConfig(deadline_max_consecutive=5)
-+    wd = DeadlineWatchdog(cfg)
-+    reason = None
-+    for _ in range(5):
-+        reason = wd.record(0.05)  # way over 0.02*(1.5)=0.03
-+    assert reason is not None
-+    assert "consecutive" in reason
++def _darks_between(pin, t0, t1):
++    """Count dark (value==False) transitions in the half-open window (t0, t1]."""
++    return sum(1 for (ts, v) in pin.transitions if t0 < ts <= t1 and v is False)
 +
 +
-+def test_deadline_faults_on_high_miss_rate():
-+    cfg = SafetyConfig(deadline_window=20, deadline_max_miss_rate=0.5,
-+                       deadline_max_consecutive=1000)
-+    wd = DeadlineWatchdog(cfg)
-+    reason = None
-+    # Alternate hit/miss -> 50% exactly is not > 0.5; make 60% misses.
-+    for i in range(20):
-+        dur = 0.05 if (i % 5 != 0) else 0.02   # 16/20 misses
-+        reason = wd.record(dur)
-+    assert reason is not None
-+    assert "miss rate" in reason
++def test_eyes_lit_at_baseline(eyes_module):
++    eyes_mod, left, right = eyes_module
++    # Long idle interval so no idle blink fires during the check.
++    e = eyes_mod.Eyes(min_interval=100.0, max_interval=100.0)
++    try:
++        time.sleep(0.1)
++        assert left.value is True and right.value is True   # resting = lit/open
++    finally:
++        e.stop()
 +
 +
-+# --- stale-command watchdog -------------------------------------------------
-+def test_stale_then_lost():
-+    cfg = SafetyConfig(stale_timeout_s=0.5, lost_timeout_s=1.0)
-+    wd = StaleCommandWatchdog(cfg)
-+    wd.heartbeat(0.0)
-+    stale, fault = wd.update(0.2, balancing=True)
-+    assert not stale and fault is None
-+    stale, fault = wd.update(0.7, balancing=True)
-+    assert stale and fault is None      # stale, fall back to idle
-+    stale, fault = wd.update(1.5, balancing=True)
-+    assert fault is not None            # persistent loss -> fault
++def test_clip_cue_takes_precedence_over_idle_then_idle_resumes(eyes_module):
++    """hold_open suppresses the idle blink for its window; once it lapses the
++    background idle blink resumes on its own."""
++    eyes_mod, left, right = eyes_module
++    # Fast idle blink so, absent a cue, dark flicks would happen frequently.
++    e = eyes_mod.Eyes(blink_duration=0.02, min_interval=0.08, max_interval=0.08,
++                      double_blink_prob=0.0)
++    try:
++        time.sleep(0.05)                 # let the thread settle, eyes lit
++        t_hold = time.monotonic()
++        e.hold_open(0.4)                 # clip cue: stay wide, suppress idle
++        time.sleep(0.3)                  # well inside the hold window
++        # No dark flicks during the hold: the cue took precedence over idle.
++        assert _darks_between(left, t_hold, time.monotonic()) == 0
++        assert left.value is True        # eyes held open
++
++        t_resume = time.monotonic()
++        time.sleep(0.5)                  # past the 0.4 s hold -> idle resumes
++        # Idle blink resumed automatically after the cue window.
++        assert _darks_between(left, t_resume + 0.05, time.monotonic()) >= 1
++    finally:
++        e.stop()
 +
 +
-+def test_lost_does_not_fault_in_dock_by_default():
-+    cfg = SafetyConfig(stale_timeout_s=0.5, lost_timeout_s=1.0,
-+                       lost_faults_in_balancing_only=True)
-+    wd = StaleCommandWatchdog(cfg)
-+    wd.heartbeat(0.0)
-+    stale, fault = wd.update(2.0, balancing=False)   # dock: idle, no fault
-+    assert stale and fault is None
++def test_blink_cue_injected_immediately(eyes_module):
++    """An explicit blink() cue fires now, not on the far-off idle schedule."""
++    eyes_mod, left, right = eyes_module
++    # Idle is 5 s away, so any dark flick within 0.2 s must be the injected cue.
++    e = eyes_mod.Eyes(blink_duration=0.02, min_interval=5.0, max_interval=5.0,
++                      double_blink_prob=0.0)
++    try:
++        time.sleep(0.05)
++        t0 = time.monotonic()
++        e.blink()
++        time.sleep(0.15)
++        assert _darks_between(left, t0, time.monotonic()) >= 1
++        assert left.value is True        # returns to lit after the flick
++    finally:
++        e.stop()
 +
 +
-+# --- thermal / duty ---------------------------------------------------------
-+def test_thermal_duty_limit_requests_cooldown():
-+    cfg = SafetyConfig(max_continuous_load_s=1.0, cooldown_s=0.5)
-+    tm = ThermalManager(cfg)
-+    cooldown = False
-+    for _ in range(60):  # 60 * 0.02 = 1.2s under load
-+        _, cooldown = tm.update(snap(0.0), under_load=True, dt=0.02)
-+    assert cooldown is True
++def test_authored_falling_edge_triggers_blink(eyes_module):
++    """note_authored honours a 1->0 authored edge as a blink (does not force
++    the eyes dark), matching set_eyes() routing in real_robot."""
++    eyes_mod, left, right = eyes_module
++    e = eyes_mod.Eyes(blink_duration=0.02, min_interval=5.0, max_interval=5.0,
++                      double_blink_prob=0.0)
++    try:
++        time.sleep(0.05)
++        t0 = time.monotonic()
++        e.note_authored(1)               # steady open, no edge
++        time.sleep(0.1)
++        assert _darks_between(left, t0, time.monotonic()) == 0
++        t1 = time.monotonic()
++        e.note_authored(0)               # 1->0 edge = one authored blink
++        time.sleep(0.15)
++        assert _darks_between(left, t1, time.monotonic()) >= 1
++        assert left.value is True        # not left dark
++    finally:
++        e.stop()
+diff --git a/tests/test_fsm.py b/tests/test_fsm.py
+index 5375441..94f3c22 100644
+--- a/tests/test_fsm.py
++++ b/tests/test_fsm.py
+@@ -11,14 +11,14 @@ INIT = np.array([0.002, 0.053, -0.63, 1.368, -0.784, 0.0, 0.0, 0.0, 0.0,
+                  -0.003, -0.065, 0.635, 1.379, -0.796])
+ 
+ 
+-def snap(t, pos, vel=0.0, tilt=0.0, feet=(1.0, 1.0), **op):
++def snap(t, pos, vel=0.0, tilt=0.0, feet=(1.0, 1.0), tilt_valid=True, **op):
+     pos = np.asarray(pos, dtype=float)
+     if np.isscalar(vel):
+         vel = np.full(14, vel, dtype=float)
+     return SensorSnapshot(
+         t_monotonic=t, joint_positions=pos,
+         joint_velocities=np.asarray(vel, dtype=float), tilt_rad=tilt,
+-        feet_contacts=np.asarray(feet, dtype=float),
++        feet_contacts=np.asarray(feet, dtype=float), tilt_valid=tilt_valid,
+         operator=OperatorInput(**op),
+     )
+ 
+@@ -234,3 +234,53 @@ def test_engine_mode_none_in_nonoperational_states():
+     assert fsm.engine_mode() is None          # ARMING
+     fsm.to_fault("x")
+     assert fsm.engine_mode() is None          # FAULT
 +
 +
-+def test_thermal_cooldown_releases_after_decay():
-+    cfg = SafetyConfig(max_continuous_load_s=1.0, cooldown_s=0.5,
-+                       cooldown_decay_rate=1.0)
-+    tm = ThermalManager(cfg)
-+    for _ in range(60):
-+        tm.update(snap(0.0), under_load=True, dt=0.02)
-+    assert tm.cooling
-+    # Relieve load; load_time must decay below the release threshold.
-+    for _ in range(60):
-+        _, cooldown = tm.update(snap(0.0), under_load=False, dt=0.02)
-+    assert tm.cooling is False
++# --- IMU-optional safety: balancing modes require valid tilt sensing ---------
++# The dock/head-only path may run with the IMU absent (tilt_valid=False, a zero
++# placeholder tilt). STAND and WALK must NEVER proceed on that fake tilt.
++def test_arming_to_stand_blocked_without_valid_tilt():
++    fsm = make()
++    t = arm_to_ready(fsm)                 # armed, holding, valid tilt
++    assert fsm.state == FSMState.ARMING
++    # Operator asks to leave the dock for STAND, but the IMU is unavailable.
++    fsm.update(snap(t + 0.02, INIT, tilt_valid=False, offdock_confirmed=True), INIT)
++    assert fsm.state == FSMState.FAULT
++    assert "IMU" in fsm.fault_reason or "tilt" in fsm.fault_reason
 +
 +
-+def test_thermal_hard_temp_limit_faults_when_available():
-+    cfg = SafetyConfig(temp_limit_c=65.0)
-+    tm = ThermalManager(cfg)
-+    temps = np.full(14, 70.0)
-+    reason, cooldown = tm.update(snap(0.0, temps=temps), under_load=True, dt=0.02)
-+    assert reason is not None and "temperature" in reason
-+    assert cooldown is True
++def test_arming_to_dock_allowed_without_valid_tilt():
++    """DOCK_DEMO is non-balancing: entering it with no IMU is allowed."""
++    fsm = make()
++    t = arm_to_ready(fsm)
++    assert fsm.state == FSMState.ARMING
++    fsm.update(snap(t + 0.02, INIT, tilt_valid=False, dock_confirmed=True), INIT)
++    assert fsm.state == FSMState.DOCK_DEMO
 +
 +
-+def test_thermal_temp_none_is_time_based_only():
-+    tm = ThermalManager(SafetyConfig())
-+    reason, _ = tm.update(snap(0.0, temps=None), under_load=True, dt=0.02)
-+    assert reason is None
-+    assert tm.temp_available is False
++def test_stand_faults_if_tilt_becomes_invalid():
++    fsm = make()
++    t = arm_to_ready(fsm, offdock_confirmed=True)
++    assert fsm.state == FSMState.STAND
++    # IMU drops out mid-stand -> tilt is no longer trustworthy -> FAULT.
++    fsm.update(snap(t + 0.02, INIT, tilt_valid=False), INIT)
++    assert fsm.state == FSMState.FAULT
 +
 +
-+# --- safety monitor + fault action ------------------------------------------
-+def test_estop_sets_fault_with_default_action():
-+    mon = SafetyMonitor(SafetyConfig(default_fault_action=FaultAction.CONTROLLED_HOLD))
-+    st = mon.update(snap(0.0, estop=True), balancing=True, under_load=True, dt=0.02)
-+    assert st.fault and st.estop
-+    assert st.fault_action == FaultAction.CONTROLLED_HOLD
++def test_walk_faults_if_tilt_becomes_invalid():
++    fsm = make()
++    t = arm_to_ready(fsm, offdock_confirmed=True)
++    t = _drive(fsm, t, 2, INIT, locomotion_command=(0.3, 0.0, 0.0))
++    assert fsm.state == FSMState.WALK
++    fsm.update(snap(t + 0.02, INIT, tilt_valid=False,
++                    locomotion_command=(0.3, 0.0, 0.0)), INIT)
++    assert fsm.state == FSMState.FAULT
 +
 +
-+def test_thermal_fault_forces_torque_off():
-+    mon = SafetyMonitor(SafetyConfig(
-+        default_fault_action=FaultAction.CONTROLLED_HOLD,
-+        thermal_fault_forces_torque_off=True, temp_limit_c=65.0))
-+    temps = np.full(14, 80.0)
-+    st = mon.update(snap(0.0, temps=temps), balancing=True, under_load=True, dt=0.02)
-+    assert st.fault
-+    assert st.fault_action == FaultAction.TORQUE_OFF  # thermal overrides hold
++def test_dock_to_stand_blocked_without_valid_tilt():
++    fsm = make()
++    t = arm_to_ready(fsm, dock_confirmed=True)
++    assert fsm.state == FSMState.DOCK_DEMO
++    # DOCK_DEMO runs fine without an IMU; leaving it for STAND must not.
++    fsm.update(snap(t + 0.02, INIT, tilt_valid=False, offdock_confirmed=True), INIT)
++    assert fsm.state == FSMState.FAULT
+diff --git a/tests/test_real_robot.py b/tests/test_real_robot.py
+index 26d1832..111dc3f 100644
+--- a/tests/test_real_robot.py
++++ b/tests/test_real_robot.py
+@@ -83,11 +83,50 @@ class _SpyDuckConfig:
+ 
+ 
+ class _SpyEyes:
++    """Models the eye device's pin lifecycle.
++
++    The real bug (#1) was ``connect()`` calling ``stop()``, whose ``deinit()``
++    killed the pins so every later write silently failed. Here ``stop()`` marks
++    the device unusable and any subsequent cue raises — exactly what a write to a
++    deinitialised pin does — so a ``connect()`` that stops the eyes is detectable.
++    """
++
+     def __init__(self):
++        self.usable = True
+         self.stopped = False
++        self.authored = []          # note_authored() history (per-frame channel)
++        self.cues = []              # expressive cue history (blink/double/hold)
++
++    def _require_usable(self):
++        if not self.usable:
++            raise RuntimeError("eye pins deinitialised (stop() was called)")
++
++    def note_authored(self, state):
++        self._require_usable()
++        self.authored.append(int(state))
++
++    def blink(self, n=1):
++        self._require_usable()
++        self.cues.append(("blink", int(n)))
++
++    def double_blink(self):
++        self._require_usable()
++        self.cues.append(("double_blink", None))
++
++    def hold_open(self, seconds=1.0):
++        self._require_usable()
++        self.cues.append(("hold_open", float(seconds)))
+ 
+     def stop(self):
+         self.stopped = True
++        self.usable = False
 +
 +
-+def test_no_fault_when_healthy():
-+    mon = SafetyMonitor(SafetyConfig())
-+    mon.heartbeat(0.0)
-+    st = mon.update(snap(0.01), balancing=True, under_load=True, dt=0.02,
-+                    last_tick_duration_s=0.02)
-+    assert not st.fault
++class _SpyImuUnavailable:
++    """An IMU whose constructor fails, as when I2C is disabled on the Pi."""
++
++    def __init__(self, sampling_freq=50):
++        raise RuntimeError("No Hardware I2C on (scl,sda)=(3,2)")
+ 
+ 
+ class _SpySounds:
+@@ -181,3 +220,89 @@ def test_enable_antennas_false_never_energises(fake_hw):
+     robot.set_antennas(0.9, -0.9)
+     assert robot.antennas is None
+     assert _SpyAntennas.instances == 0
 +
 +
-+def test_deadline_via_monitor_faults():
-+    cfg = SafetyConfig(deadline_max_consecutive=3)
-+    mon = SafetyMonitor(cfg)
-+    mon.heartbeat(0.0)
-+    st = None
-+    for i in range(3):
-+        st = mon.update(snap(i * 0.02), balancing=True, under_load=True, dt=0.02,
-+                        last_tick_duration_s=0.05)
-+    assert st.fault and "deadline" in st.fault_reason
++# --- eyes: connect must leave the eye device USABLE (regression for bug #1) ---
++def test_connect_leaves_eyes_usable_not_deinitialised(fake_hw):
++    """connect() used to build Eyes() then immediately stop() it, which
++    deinitialised the GPIO pins; every later set_eyes() then wrote to dead pins
++    and the swallowed exception meant the eyes never lit. connect() must now
++    leave the eye device alive so the per-frame eye channel reaches hardware."""
++    robot = _make()
++    robot.connect()
++    assert robot.eyes is not None
++    assert robot.eyes.usable is True          # pins NOT deinitialised by connect
++    assert robot.eyes.stopped is False        # background blink thread not stopped
++    # An authored eye channel (1->0 edge) actually reaches the live device.
++    robot.set_eyes(1)
++    robot.set_eyes(0)
++    assert robot.eyes.authored == [1, 0]
++
++
++def test_set_eye_event_maps_cues_to_hardware(fake_hw):
++    """Expressive clip eye cues reach the device with the right mapping."""
++    robot = _make()
++    robot.connect()
++    robot.set_eye_event("wide")
++    robot.set_eye_event("happy")
++    robot.set_eye_event("blink")
++    assert robot.eyes.cues == [
++        ("hold_open", 1.0),
++        ("double_blink", None),
++        ("blink", 1),
++    ]
++
++
++# --- IMU optional for dock/head, but tilt marked invalid (safety) -----------
++def test_connect_tolerates_missing_imu(fake_hw, monkeypatch):
++    """A robot with I2C disabled (no BNO055) must still connect for the dock /
++    head-only path: connect() degrades to self.imu = None with a warning."""
++    import types
++    m = types.ModuleType("mini_bdx_runtime.raw_imu")
++    m.Imu = _SpyImuUnavailable
++    monkeypatch.setitem(sys.modules, "mini_bdx_runtime.raw_imu", m)
++    robot = _make()
++    robot.connect()
++    assert robot.imu is None
++
++
++def test_read_reports_tilt_invalid_without_imu(fake_hw, monkeypatch):
++    """Without an IMU, read() falls back to zero tilt but MUST flag it invalid
++    so the FSM cannot mistake the placeholder 0.0 for 'upright' and walk blind."""
++    import types
++    m = types.ModuleType("mini_bdx_runtime.raw_imu")
++    m.Imu = _SpyImuUnavailable
++    monkeypatch.setitem(sys.modules, "mini_bdx_runtime.raw_imu", m)
++    robot = _make()
++    robot.connect()
++
++    class _PosHWI:
++        def get_present_positions(self):
++            return np.zeros(14)
++
++        def get_present_velocities(self):
++            return np.zeros(14)
++    robot.hwi = _PosHWI()
++    from mini_bdx_runtime.anim.hardware import OperatorInput
++    snap = robot.read(OperatorInput())
++    assert snap is not None
++    assert snap.tilt_rad == 0.0
++    assert snap.tilt_valid is False
++
++
++def test_read_reports_tilt_valid_with_imu(fake_hw):
++    """With a working IMU, read() reports tilt_valid=True."""
++    robot = _make()
++    robot.connect()
++
++    class _PosHWI:
++        def get_present_positions(self):
++            return np.zeros(14)
++
++        def get_present_velocities(self):
++            return np.zeros(14)
++    robot.hwi = _PosHWI()
++    from mini_bdx_runtime.anim.hardware import OperatorInput
++    snap = robot.read(OperatorInput())
++    assert snap is not None
++    assert snap.tilt_valid is True
 -- 
 2.53.0
 

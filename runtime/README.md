@@ -30,7 +30,11 @@ The Phase 4 integration includes:
 
 - **Example Clip**: `clips/idle_alive.duckanim` — a short looping idle animation for testing.
 
-- **Test Suite**: 55 unit and integration tests covering FSM transitions, animation playback, mock hardware, safety constraints, and the antenna consent gate (`tests/test_real_robot.py`).
+- **Eyes — end-to-end wiring (hardware-recovered)**: two bugs that only surfaced on the robot are fixed. `RealRobot.connect()` used to build `Eyes()` then immediately `stop()` it, which deinitialised the GPIO pins so every later `set_eyes()` wrote to dead pins (the swallowed exception meant the eyes never lit); `connect()` no longer stops the eyes. `_drive_show()` handled `sound`/`projector` events but silently dropped `eye` events, so clip cues (`wide`/`blink`/`happy`) never reached hardware; it now routes them via `set_eye_event` (mock-safe `getattr`). `eyes.py` was rewritten so a single background thread owns a natural idle blink (lit baseline; 0.12 s dark flicks; uniform 2–6 s interval; ~18% spontaneous double-blink) with thread-safe cues; `set_eyes` maps to `note_authored` (a 1→0 authored edge = a blink, no longer forcing the eyes dark) and clip cues take precedence over the idle loop, then idle resumes.
+
+- **IMU optional for non-balancing paths (hardware-recovered, safety-hardened)**: `connect()` tolerates an unavailable BNO055 (I2C disabled) by degrading to `self.imu = None` with a loud warning, so the dock / head-only demo runs on a bench without an IMU. `read()` reports `SensorSnapshot.tilt_valid`; a zero placeholder tilt is flagged invalid so it can never be mistaken for "upright". The FSM **requires** valid tilt sensing for the balancing modes: STAND/WALK refuse to be entered — and latch FAULT if entered — when `tilt_valid` is False. Only DOCK_DEMO / head paths may run IMU-less.
+
+- **Test Suite**: 71 unit and integration tests covering FSM transitions, animation playback, mock hardware, safety constraints, the antenna consent gate (`tests/test_real_robot.py`), the recovered eye wiring and idle-blink composition (`tests/test_eyes.py`), and the IMU-optional tilt-validity gating (`tests/test_fsm.py`, `tests/test_real_robot.py`).
 
 ## Getting the Code
 
@@ -45,16 +49,16 @@ cd Open_Duck_Mini_Runtime
 
 ### Fallback path — apply the patch onto a different base
 
-To re-apply the same change onto upstream `apirrone/Open_Duck_Mini_Runtime@v2` (or any other base), use the patch in this directory. It is a standard `git format-patch` artifact:
+To re-apply the same change onto upstream `apirrone/Open_Duck_Mini_Runtime@v2` (or any other base), use the patch in this directory. It is a standard `git format-patch` artifact — now a single file containing the **three** commits of `v2..feature/animation-engine` (the Phase 4 integration, the non-actuating-connect/antenna-defer fix, and the hardware-recovered eye + IMU fixes):
 
 ```bash
 git clone -b v2 https://github.com/apirrone/Open_Duck_Mini_Runtime
 cd Open_Duck_Mini_Runtime
 git am /path/to/runtime/0001-animation-engine.patch
-# or, if you do not want a commit: git apply /path/to/runtime/0001-animation-engine.patch
+# or, if you do not want commits: git apply /path/to/runtime/0001-animation-engine.patch
 ```
 
-The patch is verified to apply cleanly onto `v2` with `git apply --check`.
+The patch is verified to apply cleanly onto `v2` with `git apply --check` and `git am` (fresh clone), after which all 71 runtime tests pass.
 
 ## Setting Up a Fresh Raspberry Pi (Pi Zero 2 W, Debian 13 trixie, Python 3.13)
 
@@ -199,6 +203,19 @@ The animation engine is comfortably affordable on this hardware. Measured on the
 - **`Engine.evaluate`** hot path (DOCK mode, background + triggers): **665 µs** per tick (median 659, p95 694, max 991).
 - **Combined ≈ 1.45 ms/tick**, about **7% of the 20 ms (50 Hz) control budget** — roughly 30× headroom on `Engine.evaluate` alone — leaving ample room for bus IO and IMU reads.
 
+## Hardware bring-up results (measured on the physical robot)
+
+Recorded during the first physical bring-up of the robot (Open Duck Mini v2, Pi Zero 2 W). These are hard-won, decision-relevant numbers from running the **unmodified** `scripts/dock_demo.py` on hardware:
+
+- **Dock demo end-to-end**: ran **1352 ticks with 0 overruns** at 50 Hz (zero >20 ms deadline misses over the full ~27 s demo; a dry run beforehand was 1333 ticks / 0 overruns), with the 10 leg servos torqued at `kp=30` and **held at `init_pos`** (load-relieving dock posture) while the head, neck, antennas and eyes animated. The FSM armed from the measured limp pose (no snap), entered DOCK_DEMO, played `curious_tilt`, `happy_bounce`, `nod_yes`, `perk_up` and `double_take` over the looping `idle_alive` background, then shut down cleanly (torque off + neutral show).
+- **Thermals / power flat**: all servos **27–31 °C** and bus **7.8–7.9 V**, identical before and after the demo — the static `kp=30` leg hold produced no measurable heating and no thermal-cooldown events fired.
+- **Engine cost on-Pi vs sim**: `Engine.evaluate` measured **~732 µs/tick** on the Pi (idle_alive, mean; p95 856 µs) versus **665 µs** in sim — about 10% higher on-hardware, still tiny (~3.7% of the 20 ms budget). Per-tick control work was ~2.2 ms mean (~11% of budget, ~17.5 ms headroom).
+- **The head / dock path does NOT run the ONNX policy.** The head is driven by absolute head targets (policy bypassed), so the measured **0.777 ms** ONNX inference cost applies **only to STAND/WALK**, not to the dock/head-animation path. Budget headroom on the dock path is therefore even larger than the combined figure above.
+- **IMU-less validation**: `connect()` succeeded with the IMU-unavailable warning (I2C was disabled on this Pi), proving the optional-IMU degrade; the demo ran on a zeroed (`tilt_valid=False`) tilt snapshot, which is correct for a docked robot and is explicitly blocked from ever entering STAND/WALK.
+- **Eyes**: after the wiring fixes, the standalone eye test drove the LED pins with the background idle blink plus single/double/wide-hold cues, and the dock demo exercised the idle blink + clip eye cues together. (Physical left/right illumination is for the owner to eyeball.)
+
+> Not attempted: no walking (Rung 6) and no calibration that requires the robot to stand were run. Legs were never torqued except to hold `init_pos` in the dock. Standing/walking remains a separate, IMU-required, owner-supervised session.
+
 ## Known Limitations
 
 The following remain true on this build:
@@ -207,9 +224,9 @@ The following remain true on this build:
 
 - **Foot Contact Sensing**: This build has no foot-contact sensors, so contact state is hard-coded as `[1, 1]` (both feet always "in contact"). The dock demo holds the legs, so this only affects the STAND/dock-handoff guard; the controller will not detect unexpected slips.
 
-- **Tilt Estimation**: The IMU does not expose a quaternion, so tilt is estimated from the accelerometer gravity vector and is valid only quasi-statically. During dynamic motion the tilt estimate is unreliable.
+- **Tilt Estimation**: The IMU does not expose a quaternion, so tilt is estimated from the accelerometer gravity vector and is valid only quasi-statically. During dynamic motion the tilt estimate is unreliable. The IMU itself is now **optional for the dock / head-only path** (if the BNO055 / I2C is unavailable, `connect()` degrades to `imu=None` with a warning); `read()` then reports `tilt_valid=False`, and the FSM refuses to enter — and faults out of — STAND/WALK on an invalid tilt, so balancing modes still **require** a working IMU.
 
-- **Peripheral Hardware**: Antennas, eyes, sound, and projector are exercised in tests only via mocks. On hardware, antennas are consent-gated (see above); eyes/sounds/projector are each gated by their own `enable_*` flags / `--no-*` dock-demo switches.
+- **Peripheral Hardware**: Antennas, eyes, sound, and projector are exercised in tests via mocks/spies, and antennas + eyes were additionally validated on hardware during bring-up (see Hardware bring-up results). On hardware, antennas are consent-gated (see above); the eyes run a background idle blink plus clip cues once `connect()` runs; eyes/sounds/projector are each gated by their own `enable_*` flags / `--no-*` dock-demo switches.
 
 ## Design and Policy Documents
 
@@ -226,4 +243,4 @@ cd Open_Duck_Mini_Runtime
 OPEN_DUCK_ANIM_HOME=/path/to/Open_Duck_Mini python -m pytest tests/ -q
 ```
 
-This runs all 55 runtime tests, including FSM transitions, mock hardware, animation playback, safety constraints, and the antenna consent gate. The `open_duck_anim` core library additionally has 247 tests in this repo (`python -m pytest tests/ -q` from the repo root).
+This runs all 71 runtime tests, including FSM transitions, mock hardware, animation playback, safety constraints, the antenna consent gate, the recovered eye wiring + idle-blink composition, and the IMU-optional tilt-validity gating. The `open_duck_anim` core library additionally has 247 tests in this repo (`python -m pytest tests/ -q` from the repo root).
