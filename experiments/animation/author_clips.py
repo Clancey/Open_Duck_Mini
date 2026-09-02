@@ -386,6 +386,125 @@ def build_specs() -> List[ClipSpec]:
         antenna_r=ZERO,
     ))
 
+    # ---- A2. Emotional mood idle loops (wrap, priority 0) -------------------
+    # Moods the duck can *sit in* — so it can BE happy/sad/sleepy for a while,
+    # not just DO a happy thing. Each reads distinctly from POSTURE + RHYTHM
+    # alone. The single most important authoring insight (measured): neck_pitch
+    # is effectively maxed (only ~0.24 rad derated ptp) and is the binding
+    # constraint, so emotion is built from head_roll (tilt), head_pitch
+    # (carriage), timing, and the eyes — NEVER from neck_pitch. Head TILT (roll)
+    # is the classic emotional channel and is ~3x unused; a slight PERSISTENT
+    # roll bias is the cheapest, strongest "this duck feels something" signal.
+    #
+    # Antennas are held flat at rest (ZERO) in every one of these loops — owner
+    # decision, measured hardware noise; enforced by the library guard test.
+    # Blink CADENCE is an emotional channel and is free of that constraint, so
+    # each mood carries its feeling partly in the eyes (per-frame `eyes` track):
+    # happy=frequent quick blinks, sad=one slow heavy blink, sleepy=long droopy
+    # closes, alert=rare, grumpy=terse. Durations are mutually co-prime-ish
+    # (6.5/7.5/8.5/9.5/12.0) and distinct from the neutral idles (6/8/11) so no
+    # two background layers ever sync up. Moods carry a gentle 0.5 s body blend
+    # (unlike the neutral idles' 0.0) so swapping mood eases rather than snaps.
+    #
+    # requires_mode is "stand" (i.e. standing OR docked, not walking), NOT "any":
+    # a mood is an ambient emotional STATE you sit in at rest. The neutral idles
+    # stay "any" as the always-on baseline; while walking the gait swamps the
+    # subtle mood motion (the phase-4 head-follow check confirmed the two subtlest
+    # moods do not read over a gait) and walk_look_around (priority 5) overlays
+    # instead. Marking moods "stand" is honest about where they actually read.
+
+    # M1) Content / happy: higher head carriage (chin up), light quick rhythm,
+    # small bright wander, a slight perky persistent tilt, frequent quick blinks.
+    d = 6.5
+    f = 1.0 / d
+    specs.append(ClipSpec(
+        name="mood_content", duration_s=d, loop_mode="wrap", requires_mode="stand",
+        priority=0, blend_in_s=0.5, blend_out_s=0.5, show_blend_in_s=0.1,
+        show_blend_out_s=0.1,
+        doc="Content/happy mood loop: high bright carriage, light quick rhythm.",
+        neck_pitch=sine(3 * f, 0.024, 0.0),               # light quick breath
+        head_pitch=const(-0.10) + sine(3 * f, 0.018, np.pi),  # chin-up carriage
+        head_yaw=drift((f, 0.085, 0.3), (2 * f, 0.05, 1.7), (3 * f, 0.028, 0.9)),
+        head_roll=const(0.03) + drift((f, 0.045, 1.2), (2 * f, 0.024, 0.1)),
+        antenna_l=ZERO, antenna_r=ZERO,
+        eyes=((0.0, 1), (1.5, 0), (1.62, 1), (3.5, 0), (3.62, 1),
+              (5.2, 0), (5.32, 1)),                       # frequent quick blinks
+    ))
+
+    # M2) Sad / dejected: low carriage (chin down), slow, a slight PERSISTENT
+    # roll-tilt, long pauses, little looking around, one slow heavy blink.
+    d = 9.5
+    f = 1.0 / d
+    specs.append(ClipSpec(
+        name="mood_sad", duration_s=d, loop_mode="wrap", requires_mode="stand",
+        priority=0, blend_in_s=0.6, blend_out_s=0.7, show_blend_in_s=0.1,
+        show_blend_out_s=0.1,
+        doc="Sad/dejected mood loop: low slow carriage, persistent tilt, heavy blink.",
+        neck_pitch=const(0.035) + sine(f, 0.012, 0.0),    # tiny sink (neck maxed)
+        head_pitch=const(0.13) + sine(f, 0.018, np.pi),   # sunk carriage + sigh
+        head_roll=const(0.07) + sine(f, 0.018, 0.5),      # persistent lean
+        head_yaw=drift((f, 0.05, 0.2), (2 * f, 0.02, 1.0)),  # barely looks around
+        antenna_l=ZERO, antenna_r=ZERO,
+        eyes=((0.0, 1), (4.0, 0), (4.55, 1)),             # one slow heavy blink
+    ))
+
+    # M3) Sleepy / drowsy: very slow drift, head gradually settling then rousing
+    # slightly, a slow side loll, long droopy eye closes.
+    d = 12.0
+    f = 1.0 / d
+    specs.append(ClipSpec(
+        name="mood_sleepy", duration_s=d, loop_mode="wrap", requires_mode="stand",
+        priority=0, blend_in_s=0.6, blend_out_s=0.7, show_blend_in_s=0.1,
+        show_blend_out_s=0.1,
+        doc="Sleepy/drowsy mood loop: head settles then rouses, long droopy blinks.",
+        neck_pitch=const(0.03) + sine(f, 0.014, 0.0),
+        head_pitch=keys([(0.0, 0.05), (5.0, 0.15, "ease_out"), (7.5, 0.14, "hold"),
+                         (9.5, 0.07, "smooth")], loop=True, duration=d),  # settle->rouse
+        head_roll=const(0.03) + sine(f, 0.05, 0.3),       # slow heavy loll
+        head_yaw=sine(f, 0.04, 1.0),                      # almost still
+        antenna_l=ZERO, antenna_r=ZERO,
+        eyes=((0.0, 1), (2.2, 0), (3.1, 1), (7.5, 0), (8.7, 1)),  # long droopy closes
+    ))
+
+    # M4) Alert / attentive: upright, still, small SHARP scans with long stillness
+    # between (energy in sharpness, not amplitude), rare blink.
+    d = 7.5
+    f = 1.0 / d
+    specs.append(ClipSpec(
+        name="mood_alert", duration_s=d, loop_mode="wrap", requires_mode="stand",
+        priority=0, blend_in_s=0.3, blend_out_s=0.4, show_blend_in_s=0.1,
+        show_blend_out_s=0.1,
+        doc="Alert/attentive mood loop: upright and still with small sharp scans.",
+        neck_pitch=sine(2 * f, 0.010, 0.0),
+        head_pitch=const(-0.06) + sine(2 * f, 0.010, np.pi),  # attentive lift
+        head_yaw=keys([(0.0, 0.0), (1.2, 0.16, "ease_out"), (1.6, 0.16, "hold"),
+                       (2.0, 0.0, "ease_in"), (4.6, 0.0, "hold"),
+                       (5.2, -0.14, "ease_out"), (5.6, -0.14, "hold"),
+                       (6.1, 0.0, "ease_in")], loop=True, duration=d),  # sharp scans
+        head_roll=sine(2 * f, 0.014, 0.7),
+        antenna_l=ZERO, antenna_r=ZERO,
+        eyes=((0.0, 1), (3.6, 0), (3.68, 1)),             # one crisp blink, wide otherwise
+    ))
+
+    # M5) Grumpy / annoyed: a persistent COCKED tilt (opposite sense to sad),
+    # slightly lowered carriage, terse sharp dismissive turn-aways, terse blinks.
+    d = 8.5
+    f = 1.0 / d
+    specs.append(ClipSpec(
+        name="mood_grumpy", duration_s=d, loop_mode="wrap", requires_mode="stand",
+        priority=0, blend_in_s=0.4, blend_out_s=0.5, show_blend_in_s=0.1,
+        show_blend_out_s=0.1,
+        doc="Grumpy/annoyed mood loop: cocked tilt, low carriage, terse turn-aways.",
+        neck_pitch=const(0.02) + sine(f, 0.010, 0.0),
+        head_pitch=const(0.06) + sine(f, 0.014, np.pi),   # lowered brow
+        head_roll=const(-0.09) + sine(f, 0.014, 0.4),     # persistent cock
+        head_yaw=keys([(0.0, 0.0), (2.2, 0.0, "hold"), (2.6, -0.14, "ease_out"),
+                       (3.4, -0.12, "hold"), (4.4, 0.0, "smooth"),
+                       (8.5, 0.0, "hold")], loop=True, duration=d),  # terse turn-away
+        antenna_l=ZERO, antenna_r=ZERO,
+        eyes=((0.0, 1), (1.5, 0), (1.7, 1), (5.6, 0), (5.8, 1)),  # terse blinks
+    ))
+
     # ---- B. Curiosity / attention (once) ------------------------------------
 
     # 4) Curious head tilt with a hold + a single blink partway in.
@@ -545,6 +664,259 @@ def build_specs() -> List[ClipSpec]:
         antenna_r=keys([(0.0, 0.0), (0.25, 0.5, "smooth"), (0.9, 0.2, "smooth"),
                         (1.6, 0.05)]),
         events=(("eye", "wide", 0.1),),
+    ))
+
+    # ---- C2. Emotional one-shot beats (once) --------------------------------
+    # A genuine range of triggered feelings. Distinguished from each other by
+    # ENERGY and TIMING as much as direction (happy vs grumpy use similar
+    # amplitudes; sharpness/rhythm/recovery separate them). Built from head
+    # ROLL/PITCH/YAW/timing/eyes — neck_pitch stays tiny (it is maxed). Antennas
+    # ARE used here: a brief crisp flick/fold reads as ears and is a momentary
+    # gesture, not the sustained loop buzz the owner objected to — kept short and
+    # under the slew cap. Priorities slot above the mood loops (0) so any of
+    # these preempts the current mood; startle (30) still preempts all.
+
+    # E1) Excited / delighted: high-energy sharp triple bob + wiggle + rapid
+    # double blink + bright antenna flicks. Happy_bounce's louder cousin.
+    specs.append(ClipSpec(
+        name="excited", authoring_path="blender", duration_s=2.2, loop_mode="once",
+        requires_mode="stand", priority=22, blend_in_s=0.1, blend_out_s=0.3,
+        doc="Excited/delighted: sharp triple bob, quick wiggle, rapid double blink.",
+        head_pitch=(pulse(0.35, 0.26, -0.11) + pulse(0.75, 0.26, -0.10)
+                    + pulse(1.15, 0.26, -0.08)),          # bright chin-up bobs
+        neck_pitch=(pulse(0.35, 0.28, -0.05) + pulse(0.75, 0.28, -0.045)
+                    + pulse(1.15, 0.28, -0.04)),
+        head_yaw=(pulse(0.55, 0.22, 0.14) + pulse(0.95, 0.22, -0.14)
+                  + pulse(1.35, 0.22, 0.10)),             # quick side-to-side
+        head_roll=pulse(1.55, 0.4, 0.09),                 # a bright tilt to finish
+        antenna_l=(pulse(0.35, 0.24, 0.42) + pulse(0.8, 0.24, 0.42)
+                   + pulse(1.25, 0.24, 0.34)),
+        antenna_r=(pulse(0.35, 0.24, 0.42) + pulse(0.8, 0.24, 0.42)
+                   + pulse(1.25, 0.24, 0.34)),
+        events=(("eye", "happy", 0.35), ("eye", "happy", 1.15)),  # rapid double
+    ))
+
+    # E2) Grumpy / annoyed: one sharp dismissive turn-away with a cocked tilt and
+    # a terse antenna fold, then a grudging settle. Terse, not an oscillation.
+    specs.append(ClipSpec(
+        name="grumpy_annoyed", authoring_path="blender", duration_s=2.0,
+        loop_mode="once", requires_mode="stand", priority=21, blend_in_s=0.12,
+        blend_out_s=0.3,
+        doc="Grumpy/annoyed: sharp cocked turn-away with a terse antenna fold.",
+        head_yaw=keys([(0.0, 0.0), (0.35, -0.28, "ease_out"), (1.0, -0.26, "hold"),
+                       (2.0, 0.0, "smooth")]),
+        head_roll=keys([(0.0, 0.0), (0.4, -0.10, "ease_out"), (1.0, -0.09, "hold"),
+                        (2.0, 0.0, "smooth")]),           # cocked "hmph"
+        head_pitch=keys([(0.0, 0.0), (0.4, 0.06, "ease_out"), (1.0, 0.055, "hold"),
+                         (2.0, 0.0, "smooth")]),
+        neck_pitch=pulse(0.5, 0.4, 0.03),
+        antenna_l=keys([(0.0, 0.0), (0.3, -0.28, "ease_out"), (1.2, -0.26, "hold"),
+                        (2.0, 0.0)]),                     # fold back, annoyed
+        antenna_r=keys([(0.0, 0.0), (0.3, -0.28, "ease_out"), (1.2, -0.26, "hold"),
+                        (2.0, 0.0)]),
+        events=(("eye", "blink", 0.35),),
+    ))
+
+    # E3) Confused / puzzled: the classic quizzical DOUBLE tilt — roll one way,
+    # hold, roll the OTHER way, hold — with asymmetric antennas (one up, one
+    # down) and a slow blink. Leans hard on the roll channel.
+    specs.append(ClipSpec(
+        name="confused_puzzled", authoring_path="blender", duration_s=3.0,
+        loop_mode="once", requires_mode="any", priority=12, blend_in_s=0.25,
+        blend_out_s=0.35,
+        doc="Confused/puzzled: quizzical double head-tilt with asymmetric antennas.",
+        head_roll=keys([(0.0, 0.0), (0.7, 0.15, "ease_out"), (1.3, 0.15, "hold"),
+                        (1.9, -0.13, "smooth"), (2.4, -0.13, "hold"),
+                        (3.0, 0.0, "smooth")]),
+        head_yaw=keys([(0.0, 0.0), (0.7, 0.08, "ease_out"), (1.9, -0.07, "smooth"),
+                       (3.0, 0.0, "smooth")]),
+        head_pitch=keys([(0.0, 0.0), (0.7, 0.04, "ease_out"), (3.0, 0.0)]),
+        neck_pitch=pulse(0.8, 0.9, -0.025),
+        antenna_l=keys([(0.0, 0.0), (0.7, 0.22, "ease_out"), (2.4, 0.15, "hold"),
+                        (3.0, 0.0)]),                     # one ear up ...
+        antenna_r=keys([(0.0, 0.0), (0.7, -0.18, "ease_out"), (2.4, -0.12, "hold"),
+                        (3.0, 0.0)]),                     # ... one ear down (quizzical)
+        eyes=((0.0, 1), (1.4, 0), (1.78, 1)),             # slow blink at the switch
+    ))
+
+    # E4) Proud / pleased: a dignified slow puff-up — chin up, neck lifts,
+    # antennas raised and held, a slow content blink. Slow and held, not a snap.
+    specs.append(ClipSpec(
+        name="proud_pleased", authoring_path="blender", duration_s=2.6,
+        loop_mode="once", requires_mode="stand", priority=18, blend_in_s=0.25,
+        blend_out_s=0.4,
+        doc="Proud/pleased: dignified slow chest-puff, chin up, antennas raised.",
+        head_pitch=keys([(0.0, 0.0), (0.8, -0.15, "ease_out"), (1.8, -0.14, "hold"),
+                         (2.6, 0.0, "smooth")]),
+        neck_pitch=keys([(0.0, 0.0), (0.8, -0.05, "ease_out"), (1.8, -0.05, "hold"),
+                         (2.6, 0.0)]),
+        head_roll=keys([(0.0, 0.0), (1.0, 0.05, "ease_out"), (1.8, 0.05, "hold"),
+                        (2.6, 0.0)]),
+        head_yaw=pulse(1.3, 0.6, 0.08),                   # a slow survey
+        antenna_l=keys([(0.0, 0.0), (0.7, 0.32, "ease_out"), (1.9, 0.30, "hold"),
+                        (2.6, 0.05)]),
+        antenna_r=keys([(0.0, 0.0), (0.7, 0.32, "ease_out"), (1.9, 0.30, "hold"),
+                        (2.6, 0.05)]),
+        eyes=((0.0, 1), (1.5, 0), (1.9, 1)),              # slow content blink
+    ))
+
+    # E5) Timid / shy: shrink back and away — lower, turn away with a tilt,
+    # antennas fold, then a small shy peek back. Lateral, unlike sad's frontal sink.
+    specs.append(ClipSpec(
+        name="timid_shy", authoring_path="blender", duration_s=3.0, loop_mode="once",
+        requires_mode="stand", priority=16, blend_in_s=0.3, blend_out_s=0.45,
+        doc="Timid/shy: shrink and turn away with a tilt, fold antennas, peek back.",
+        head_yaw=keys([(0.0, 0.0), (0.9, -0.28, "ease_out"), (1.6, -0.26, "hold"),
+                       (2.1, -0.14, "smooth"), (2.5, -0.20, "smooth"),
+                       (3.0, 0.0, "smooth")]),            # turn away, tiny peek back
+        head_pitch=keys([(0.0, 0.0), (0.9, 0.09, "ease_out"), (2.2, 0.08, "hold"),
+                         (3.0, 0.0, "smooth")]),
+        head_roll=keys([(0.0, 0.0), (0.9, -0.10, "ease_out"), (2.2, -0.09, "hold"),
+                        (3.0, 0.0, "smooth")]),           # tilt into the shoulder
+        neck_pitch=pulse(1.1, 1.0, 0.03),
+        antenna_l=keys([(0.0, 0.0), (0.8, -0.26, "ease_out"), (2.2, -0.24, "hold"),
+                        (3.0, 0.0)]),
+        antenna_r=keys([(0.0, 0.0), (0.8, -0.26, "ease_out"), (2.2, -0.24, "hold"),
+                        (3.0, 0.0)]),
+        eyes=((0.0, 1), (1.0, 0), (1.4, 1)),
+    ))
+
+    # E6) Disappointed: the let-down — a small hopeful lift, then a slow sink
+    # with a sigh and a turn-away. The anticipation beat separates it from sad.
+    specs.append(ClipSpec(
+        name="disappointed", authoring_path="blender", duration_s=3.0,
+        loop_mode="once", requires_mode="stand", priority=16, blend_in_s=0.3,
+        blend_out_s=0.5,
+        doc="Disappointed: a hopeful lift then a slow let-down sink with a sigh.",
+        head_pitch=keys([(0.0, 0.0), (0.5, -0.08, "ease_out"), (0.9, -0.07, "hold"),
+                         (1.8, 0.14, "smooth"), (2.5, 0.12, "hold"),
+                         (3.0, 0.0, "smooth")]),          # hope up -> sink down
+        neck_pitch=keys([(0.0, 0.0), (0.5, -0.03), (1.8, 0.05, "smooth"), (3.0, 0.0)]),
+        head_roll=keys([(0.0, 0.0), (1.8, 0.06, "ease_out"), (3.0, 0.0, "smooth")]),
+        head_yaw=pulse(2.1, 0.7, -0.08),                  # turn away as it sinks
+        antenna_l=keys([(0.0, 0.0), (0.5, 0.14, "ease_out"), (0.9, 0.12, "hold"),
+                        (1.9, -0.22, "smooth"), (2.6, -0.20, "hold"), (3.0, 0.0)]),
+        antenna_r=keys([(0.0, 0.0), (0.5, 0.14, "ease_out"), (0.9, 0.12, "hold"),
+                        (1.9, -0.22, "smooth"), (2.6, -0.20, "hold"), (3.0, 0.0)]),
+        eyes=((0.0, 1), (1.8, 0), (2.2, 1)),              # slow blink on the sink
+    ))
+
+    # E7) Suspicious / wary: a cocked tilt held, a slight lean-in, a slow narrow
+    # scan, wary half-back antennas. Suspicion lives in the sustained cock.
+    specs.append(ClipSpec(
+        name="suspicious_wary", authoring_path="blender", duration_s=3.4,
+        loop_mode="once", requires_mode="stand", priority=14, blend_in_s=0.3,
+        blend_out_s=0.4,
+        doc="Suspicious/wary: cocked tilt, lean-in, slow narrow scan, wary antennas.",
+        head_roll=keys([(0.0, 0.0), (0.8, 0.11, "ease_out"), (2.6, 0.11, "hold"),
+                        (3.4, 0.0, "smooth")]),           # held cock
+        head_yaw=keys([(0.0, 0.0), (1.2, -0.18, "ease_out"), (1.8, -0.17, "hold"),
+                       (2.8, 0.14, "smooth"), (3.4, 0.0, "smooth")]),  # narrow scan
+        neck_pitch=keys([(0.0, 0.0), (0.8, 0.045, "ease_out"), (2.6, 0.045, "hold"),
+                         (3.4, 0.0)]),                    # slight lean-in
+        head_pitch=keys([(0.0, 0.0), (0.8, 0.05, "ease_out"), (2.6, 0.05, "hold"),
+                         (3.4, 0.0)]),
+        antenna_l=keys([(0.0, 0.0), (0.7, -0.18, "ease_out"), (2.6, -0.16, "hold"),
+                        (3.4, 0.0)]),
+        antenna_r=keys([(0.0, 0.0), (0.7, -0.18, "ease_out"), (2.6, -0.16, "hold"),
+                        (3.4, 0.0)]),
+        eyes=((0.0, 1), (1.0, 0), (1.5, 1)),
+    ))
+
+    # E8) Sleepy yawn: a big slow stretch — head tilts back and up, a long eye
+    # close (the yawn), antennas stretch up then flop, then a drowsy settle down.
+    specs.append(ClipSpec(
+        name="sleepy_yawn", authoring_path="blender", duration_s=3.6, loop_mode="once",
+        requires_mode="stand", priority=17, blend_in_s=0.3, blend_out_s=0.5,
+        doc="Sleepy yawn: a big slow back-and-up stretch, long eye close, settle.",
+        head_pitch=keys([(0.0, 0.0), (1.0, -0.16, "ease_out"), (1.6, -0.15, "hold"),
+                         (2.6, 0.12, "smooth"), (3.1, 0.10, "hold"),
+                         (3.6, 0.0, "smooth")]),          # stretch back -> settle down
+        neck_pitch=keys([(0.0, 0.0), (1.0, -0.05, "ease_out"), (2.6, 0.04, "smooth"),
+                         (3.6, 0.0)]),
+        head_roll=keys([(0.0, 0.0), (1.3, 0.07, "ease_out"), (2.6, 0.05, "smooth"),
+                        (3.6, 0.0)]),                     # slow loll
+        antenna_l=keys([(0.0, 0.0), (1.0, 0.28, "ease_out"), (1.6, 0.26, "hold"),
+                        (2.6, -0.10, "smooth"), (3.6, 0.0)]),  # stretch then flop
+        antenna_r=keys([(0.0, 0.0), (1.0, 0.28, "ease_out"), (1.6, 0.26, "hold"),
+                        (2.6, -0.10, "smooth"), (3.6, 0.0)]),
+        eyes=((0.0, 1), (0.8, 0), (2.2, 1)),              # long yawn eye-close (1.4s)
+    ))
+
+    # E9) Affectionate: a warm lean-in nuzzle — tilt and lean toward, a soft bob,
+    # relaxed antennas forward, a soft slow content blink.
+    specs.append(ClipSpec(
+        name="affectionate", authoring_path="blender", duration_s=2.8, loop_mode="once",
+        requires_mode="any", priority=14, blend_in_s=0.3, blend_out_s=0.4,
+        doc="Affectionate: a warm tilt-lean nuzzle with a soft bob and slow blink.",
+        head_roll=keys([(0.0, 0.0), (0.8, 0.12, "ease_out"), (1.8, 0.11, "hold"),
+                        (2.8, 0.0, "smooth")]),           # warm tilt-lean
+        neck_pitch=keys([(0.0, 0.0), (0.8, 0.05, "ease_out"), (1.4, 0.02, "smooth"),
+                         (2.0, 0.05, "smooth"), (2.8, 0.0)]),  # soft nuzzle bob
+        head_pitch=pulse(1.4, 0.6, 0.06),
+        head_yaw=pulse(1.0, 0.9, 0.06),                   # lean toward
+        antenna_l=keys([(0.0, 0.0), (0.9, 0.16, "ease_out"), (2.0, 0.14, "hold"),
+                        (2.8, 0.0)]),
+        antenna_r=keys([(0.0, 0.0), (0.9, 0.16, "ease_out"), (2.0, 0.14, "hold"),
+                        (2.8, 0.0)]),
+        eyes=((0.0, 1), (1.3, 0), (1.7, 1)),
+    ))
+
+    # E10) Flustered / embarrassed: a quick wavering look-away + a downward tuck,
+    # with the RAPID "fluster" energy carried by the antennas + a rapid double
+    # blink (both can move fast; the soft kp=8 head servo cannot track fast head
+    # jitter, so the head motion is kept clean and the flutter lives in the ears
+    # and eyes — a deliberate craft choice, not a compromise).
+    specs.append(ClipSpec(
+        name="flustered", authoring_path="blender", duration_s=2.2, loop_mode="once",
+        requires_mode="stand", priority=20, blend_in_s=0.1, blend_out_s=0.25,
+        doc="Flustered/embarrassed: wavering look-away + tuck, rapid antenna+eye flutter.",
+        head_yaw=keys([(0.0, 0.0), (0.5, -0.17, "ease_out"), (0.9, -0.14, "hold"),
+                       (1.3, -0.06, "smooth"), (1.7, -0.12, "smooth"),
+                       (2.2, 0.0, "smooth")]),            # a wavering look-away
+        head_pitch=keys([(0.0, 0.0), (0.5, 0.07, "ease_out"), (1.4, 0.06, "hold"),
+                         (2.2, 0.0, "smooth")]),          # embarrassed look-down tuck
+        head_roll=(pulse(0.6, 0.45, -0.05) + pulse(1.4, 0.45, 0.05)),  # small tilt waver
+        neck_pitch=pulse(0.9, 0.8, 0.025),
+        antenna_l=(pulse(0.4, 0.2, 0.30) + pulse(0.8, 0.2, 0.30)
+                   + pulse(1.2, 0.2, -0.20)),             # rapid ear flutter
+        antenna_r=(pulse(0.4, 0.2, 0.30) + pulse(0.8, 0.2, 0.30)
+                   + pulse(1.2, 0.2, -0.20)),
+        events=(("eye", "double", 0.4),),                 # rapid double blink
+    ))
+
+    # E11) Content sigh: a relaxed exhale — a gentle lift then a slow soft settle
+    # with a soft loll and a soft blink. A low-energy positive beat.
+    specs.append(ClipSpec(
+        name="content_sigh", authoring_path="blender", duration_s=2.8, loop_mode="once",
+        requires_mode="any", priority=12, blend_in_s=0.3, blend_out_s=0.45,
+        doc="Content sigh: a gentle lift then a slow relaxed exhale settle.",
+        head_pitch=keys([(0.0, 0.0), (0.7, -0.07, "ease_out"), (1.2, -0.06, "hold"),
+                         (2.2, 0.05, "smooth"), (2.8, 0.0, "smooth")]),  # inhale->exhale
+        neck_pitch=keys([(0.0, 0.0), (0.7, -0.03), (2.2, 0.03, "smooth"), (2.8, 0.0)]),
+        head_roll=keys([(0.0, 0.0), (1.4, 0.06, "ease_out"), (2.8, 0.0, "smooth")]),
+        antenna_l=keys([(0.0, 0.0), (0.8, 0.10, "ease_out"), (2.0, 0.08, "hold"),
+                        (2.8, 0.0)]),
+        antenna_r=keys([(0.0, 0.0), (0.8, 0.10, "ease_out"), (2.0, 0.08, "hold"),
+                        (2.8, 0.0)]),
+        eyes=((0.0, 1), (1.2, 0), (1.6, 1)),
+    ))
+
+    # E12) Greeting: a friendly "hello" — a warm double bob with a tilt, antennas
+    # raised bright, a happy double blink. Social, distinct from nod_yes's assent.
+    specs.append(ClipSpec(
+        name="greeting", authoring_path="blender", duration_s=2.4, loop_mode="once",
+        requires_mode="stand", priority=18, blend_in_s=0.12, blend_out_s=0.3,
+        doc="Greeting: a friendly double bob with a tilt and a bright antenna raise.",
+        head_pitch=(pulse(0.45, 0.35, 0.12) + pulse(1.05, 0.35, 0.10)),  # warm nods
+        neck_pitch=(pulse(0.45, 0.4, 0.04) + pulse(1.05, 0.4, 0.035)),
+        head_roll=pulse(1.3, 0.5, 0.09),                  # friendly tilt
+        head_yaw=pulse(0.7, 0.9, 0.06),
+        antenna_l=keys([(0.0, 0.0), (0.4, 0.30, "ease_out"), (1.4, 0.26, "hold"),
+                        (2.4, 0.05)]),
+        antenna_r=keys([(0.0, 0.0), (0.4, 0.30, "ease_out"), (1.4, 0.26, "hold"),
+                        (2.4, 0.05)]),
+        events=(("eye", "happy", 0.45),),                 # friendly double blink
     ))
 
     # ---- D. Walk-compatible variants (small amplitude, requires_mode=walk) ---

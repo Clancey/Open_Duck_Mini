@@ -13,14 +13,20 @@ derated — will play them without the runtime having to clamp anything.
 
 ## The library
 
-Categories: **A** idle/alive loops · **B** curiosity/attention · **C**
-expressive reactions · **D** walk-compatible.
+Categories: **A** idle/alive loops · **AM** emotional mood loops · **B**
+curiosity/attention · **C** expressive reactions · **CE** emotional one-shot
+beats · **D** walk-compatible.
 
 | Clip | Cat | Dur | Loop | Mode | Prio | Path | What it is / when to trigger |
 |------|:---:|----:|------|------|-----:|------|------------------------------|
 | `idle_breathe` | A | 6.0s | wrap | any | 0 | parametric | Slow breathing-like neck bob. The **default background** "alive" loop under standing/docked. |
 | `idle_scan` | A | 11.0s | wrap | any | 0 | parametric | Occasional slow head scan with holds over a breathing underlay. Long period so it never syncs with `idle_breathe`. |
 | `idle_lookaround` | A | 8.0s | wrap | any | 0 | parametric | Restless micro weight-shifts and gaze wander; detuned so it never quite repeats. |
+| `mood_content` | AM | 6.5s | wrap | stand | 0 | parametric | **Happy/content mood** to sit in: high bright head carriage, light quick rhythm, small bright wander, a perky persistent tilt, frequent quick blinks. Set as the base when things are going well. |
+| `mood_sad` | AM | 9.5s | wrap | stand | 0 | parametric | **Sad/dejected mood**: low slow carriage, a slight persistent roll-tilt, long pauses, barely looks around, one slow heavy blink. Set on repeated failure / long neglect. |
+| `mood_sleepy` | AM | 12.0s | wrap | stand | 0 | parametric | **Sleepy/drowsy mood**: very slow drift, head settles then rouses slightly, a slow loll, long droopy eye-closes. Set on low battery / late / long idle. |
+| `mood_alert` | AM | 7.5s | wrap | stand | 0 | parametric | **Alert/attentive mood**: upright and still with small sharp scans and long stillness between; wide, rare blink. Set when watching for something. |
+| `mood_grumpy` | AM | 8.5s | wrap | stand | 0 | parametric | **Grumpy/annoyed mood**: a persistent cocked tilt, lowered carriage, terse sharp dismissive turn-aways, terse blinks. Set when repeatedly interrupted / poked. |
 | `curious_tilt` | B | 2.6s | once | any | 10 | blender | Inquisitive head-roll tilt held briefly, with a blink. Trigger on "notices something". |
 | `look_toward` | B | 2.2s | once | any | 10 | blender | Directed look toward a point of interest, held, released. Trigger to point attention. |
 | `double_take` | B | 2.4s | once | stand | 12 | blender | Glance away then a quick snap-back double-take. Stand-only (snappy). Trigger for a surprise it re-checks. |
@@ -31,11 +37,121 @@ expressive reactions · **D** walk-compatible.
 | `happy_bounce` | C | 2.0s | once | stand | 18 | blender | Delighted bob with a bright antenna flick (event). Trigger on success/reward. |
 | `sad_droop` | C | 3.2s | once | stand | 16 | blender | Dejected droop: head sinks, antennas fold back, slow settle with a slow blink. Trigger on failure/idle-too-long. |
 | `startle` | C | 1.6s | once | stand | 30 | blender | Startled recoil then a wary settle. **Highest priority** — preempts everything. Trigger on a sudden event. |
+| `excited` | CE | 2.2s | once | stand | 22 | blender | Excited/delighted: sharp triple bob + quick wiggle + rapid double blink + bright antenna flicks. Trigger on a big reward / a favourite thing. `happy_bounce`'s louder cousin. |
+| `grumpy_annoyed` | CE | 2.0s | once | stand | 21 | blender | Grumpy/annoyed: one sharp cocked turn-away + terse antenna fold. Trigger on a poke / a "no". |
+| `confused_puzzled` | CE | 3.0s | once | any | 12 | blender | Confused/puzzled: the quizzical **double** head-tilt (roll one way then the other) + asymmetric antennas (one up, one down) + slow blink. Trigger on an unexpected / ambiguous input. |
+| `proud_pleased` | CE | 2.6s | once | stand | 18 | blender | Proud/pleased: a dignified slow chest-puff — chin up, antennas raised and held, slow content blink. Trigger on completing something well. |
+| `timid_shy` | CE | 3.0s | once | stand | 16 | blender | Timid/shy: shrink and turn away with a tilt, antennas fold, then a small shy peek back. Trigger on a stranger / being told off. |
+| `disappointed` | CE | 3.0s | once | stand | 16 | blender | Disappointed: a small hopeful lift, then a slow let-down sink with a sigh and a turn-away. The anticipation beat separates it from `sad_droop`. Trigger on a near-miss / a broken promise. |
+| `suspicious_wary` | CE | 3.4s | once | stand | 14 | blender | Suspicious/wary: a held cocked tilt + a slight lean-in + a slow narrow scan + wary half-back antennas. Trigger on something it doesn't trust. |
+| `sleepy_yawn` | CE | 3.6s | once | stand | 17 | blender | Sleepy yawn: a big slow back-and-up stretch, a long eye-close (the yawn), antennas stretch then flop, drowsy settle. Trigger on going idle / low battery. |
+| `affectionate` | CE | 2.8s | once | any | 14 | blender | Affectionate: a warm tilt-lean nuzzle with a soft bob and a slow content blink. Trigger on being greeted / petted / a familiar face. |
+| `flustered` | CE | 2.2s | once | stand | 20 | blender | Flustered/embarrassed: a wavering look-away + tuck, with the rapid flutter in the **antennas + a double blink** (not the head — see below). Trigger on being caught out / an error it "notices". |
+| `content_sigh` | CE | 2.8s | once | any | 12 | blender | Content sigh: a gentle lift then a slow relaxed exhale settle. A quiet positive beat. Trigger on settling down / a job well done. |
+| `greeting` | CE | 2.4s | once | stand | 18 | blender | Greeting: a friendly "hello" — a warm double bob with a tilt + a bright antenna raise + a happy double blink. Trigger on a person appearing. |
 | `walk_look_around` | D | 7.0s | wrap | walk | 5 | parametric | Gentle gaze wander to overlay **while walking**. Small, legible, seamless loop. |
 | `walk_alert` | D | 2.0s | once | walk | 15 | blender | Contained "something caught my eye" alert usable mid-stride. |
 
 `idle_alive.duckanim` (the original reference clip, 4.0s wrap, `any`, prio 0)
 also lives here and is covered by the same tests.
+
+### The emotional palette (categories AM and CE)
+
+The duck can now **be** in a mood and **do** emotional beats, not just react.
+
+* **Mood loops (`mood_*`, category AM)** are the real unlock: seamless `wrap`
+  loops at `priority 0` that the duck can *sit in* for minutes, so it can be
+  happy / sad / sleepy / alert / grumpy as an ambient state. Each reads
+  distinctly at a glance from **posture and rhythm alone** — higher vs lower
+  head carriage, a persistent tilt, fast-and-bright vs slow-and-heavy timing,
+  and blink cadence. They are `requires_mode = "stand"` (standing **or** docked,
+  not walking): a mood is a *resting* state, and the walking gait swamps its
+  subtle motion (the phase-4 head-follow check confirmed the two subtlest moods
+  do not read over a gait), so while walking the neutral idles + `walk_look_around`
+  take over. Antennas are held flat at rest in every mood loop (owner decision,
+  enforced by the guard test); the blink cadence carries the eye expression.
+  Set the mood from application state; a triggered reaction (any `priority > 0`)
+  preempts it and it blends back when the reaction finishes.
+* **One-shot beats (category CE)** extend the triggered reactions across a full
+  emotional range. They are distinguished from one another by **energy and
+  timing** as much as direction — `excited` and `grumpy_annoyed` use similar
+  amplitudes; sharpness, rhythm and recovery time separate them. Antennas *are*
+  used here (brief crisp flicks/folds read as ears and are momentary, not the
+  sustained loop buzz the owner objected to).
+
+### Eyes are an emotional channel
+
+Blink behaviour carries real emotional weight and the runtime supports three
+cues (see `runtime/pi/idle_service.py`, `EyeDriver`):
+
+* the per-frame `eyes` track (0 = closed, 1 = open) — a **longer closed window
+  is a slower, heavier blink**. This is how `mood_sad` / `mood_sleepy` /
+  `sleepy_yawn` get their heavy, drowsy lids and how the mood loops set their
+  blink *cadence* (happy = frequent quick blinks, sad = one slow heavy blink,
+  sleepy = long droopy closes, alert = rare);
+* the `("eye", "wide"|"alert"|"startle"|"open", t)` event → **wide, held ~1 s**
+  (fear / alert / surprise);
+* the `("eye", "happy"|"double"|"double_blink", t)` event → a **rapid double
+  blink** (excited / delighted / flustered).
+
+**Runtime gaps worth closing (named, not faked):** there is no **squint /
+half-closed held** cue and no **variable-speed blink** event. `suspicious_wary`
+would read sharper with a squint, and `mood_sad` would benefit from a genuinely
+*slow* blink event rather than a long hard close. Both are currently approximated
+with the per-frame `eyes` track. If you extend the runtime, a `squint` (hold the
+lids partly closed) and a `slow_blink` (eased close/open over a settable duration)
+are the two highest-value additions.
+
+### Authoring emotion: build it from roll / pitch / timing / eyes — **not** `neck_pitch`
+
+This is the single most important lesson from building this palette, and it is
+backed by measurement, not taste. Peak-to-peak channel usage across the original
+16 clips, measured against the ×0.5 derated envelope:
+
+| channel | max ptp used | derated ptp available | headroom |
+|---|---|---|---|
+| `neck_pitch` | 0.10 | ~0.24 | **effectively maxed** — the binding constraint, hardware-confirmed |
+| `head_pitch` | 0.20 | ~0.78 | **~4× unused** |
+| `head_roll` | 0.16 | ~0.50 | **~3× unused** |
+| `head_yaw` | 0.80 | ~1.50 | plenty spare |
+
+So **do not try to express emotion through `neck_pitch`.** It is the one axis
+with no room, and it is exactly the axis sadness/dejection instinctively reaches
+for (the head wanting to *sink*) — which is why the original `sad_droop` reads
+weakly. The expressive room is in the other channels:
+
+* **`head_roll` (tilt) is the strongest and cheapest emotional signal** and was
+  barely used before. Sympathy, confusion, curiosity, quizzicality, wariness all
+  live in roll. A slight **persistent** tilt (asymmetric, off-centre) instantly
+  reads as feeling something — `mood_grumpy`, `mood_sad`, `suspicious_wary`,
+  `confused_puzzled` all lean on it.
+* **`head_pitch` is head *carriage*** — high (chin-up, `head_pitch` negative)
+  reads bright/proud/alert; low reads dejected/sleepy. This is where "sinking"
+  should go instead of `neck_pitch`.
+* **Timing conveys emotion more than amplitude.** The same head turn reads eager,
+  neutral, or reluctant purely from its acceleration curve and hold time. Happy
+  and angry can share amplitudes — sharpness, rhythm and recovery time separate
+  them. Lean on this hard, given the `neck_pitch` ceiling.
+* **The eyes** (blink cadence + the two events above) carry a large share of the
+  read for almost no motion cost.
+
+Two hardware realities shape the timing:
+
+* **Head `kp` is a soft 8**, so the head servo lags and undershoots fast motion.
+  `head_pitch` under-reaches ~0.08 rad at the top of its range against gravity.
+  **Author for a soft, slightly laggy servo:** ease in and out, let poses settle,
+  don't rely on crisp snaps landing exactly. Fast oscillations (≥~2.5 Hz) simply
+  do not track — the phase-4 head-follow check *fails* clips that put fast jitter
+  on the head. Put rapid/nervous energy in the **antennas and eyes** (which move
+  fast) and keep the head clean and slower. `flustered` is authored exactly this
+  way: a slow wavering look-away on the head, all the "flustered" speed in the
+  antenna flicks + a double blink.
+* **Asymmetry and imperfection read as alive.** Avoid symmetric arcs, exact
+  repeats, and perfectly centred rest poses. Hold poses and let them settle with
+  a tiny drift (reads as thinking/feeling); a pose that snaps and freezes reads as
+  broken. A small counter-move before the main move (anticipation) and a slight
+  settle after (overshoot) is what separates animation from interpolation.
+
 
 ### Priorities & arbitration
 
@@ -58,7 +174,8 @@ Bodies default to `blend_in_s = blend_out_s = 0.35 s` (`T_alpha`) and show
 functions (antennas/eyes) to `0.10 s` (`T_beta`). Exceptions are deliberate:
 idles use `0.0` (they are the always-on background), `startle` blends **in**
 fast (`0.05 s`) so the recoil lands, and `sad_droop` blends slowly (`0.4 / 0.5`)
-so it settles rather than snaps.
+so it settles rather than snaps. The emotional **mood loops** blend in over
+`0.5 s` so switching moods is a soft cross-fade rather than a jump.
 
 ## Antennas: never in idle loops (explicit owner decision)
 
