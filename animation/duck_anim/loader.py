@@ -78,9 +78,7 @@ def resample_clip(clip: AnimationClip, new_fps: float) -> AnimationClip:
     else:
         old_times = np.linspace(0.0, duration, num=n_in, dtype=np.float64)
         n_out = max(round(duration * new_fps), 2) if duration > 0 else 1
-        new_times = np.arange(n_out, dtype=np.float64) / float(new_fps)
-        # Clamp so numerical noise can't extrapolate past the last frame.
-        new_times = np.clip(new_times, 0.0, duration)
+        new_times = np.linspace(0.0, duration, num=n_out, dtype=np.float64)
         frames_out = np.empty((n_out, clip.frames.shape[1]), dtype=np.float32)
         for j in range(clip.frames.shape[1]):
             frames_out[:, j] = np.interp(new_times, old_times, clip.frames[:, j])

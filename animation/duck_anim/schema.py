@@ -112,7 +112,12 @@ class AnimationClip:
         if missing:
             raise ClipValidationError(f"Clip is missing required fields: {missing}")
         joints = list(data["joints"])
-        frames = np.asarray(data["frames"], dtype=np.float32)
+        try:
+            frames = np.asarray(data["frames"], dtype=np.float32)
+        except (TypeError, ValueError) as exc:
+            raise ClipValidationError(
+                "frames must be a rectangular numeric 2-D array"
+            ) from exc
         if frames.size == 0:
             frames = frames.reshape(0, len(joints))
         elif frames.ndim == 1:
