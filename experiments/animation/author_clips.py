@@ -261,7 +261,8 @@ class ClipSpec:
     head_yaw: TrackLike = 0.0
     head_roll: TrackLike = 0.0
     # Antenna tracks in normalised [-1,1] units (left/right independent). Default
-    # a barely-there idle drift so the antennas are never dead-still.
+    # is rest (0.0): antennas are quiet by default and only move where the motion
+    # carries meaning — real-hardware feedback was that they were audibly noisy.
     antenna_l: TrackLike = 0.0
     antenna_r: TrackLike = 0.0
     # Discrete show events: (type, value, t_sec). Eye blinks: ("eye","blink",t).
@@ -301,12 +302,28 @@ class ClipSpec:
 
 
 def build_specs() -> List[ClipSpec]:
-    # A tiny always-alive antenna shimmer reused by several idles (seamless over
-    # its own period; callers pass it directly).
-    def antenna_idle(sign=1.0, dur=8.0):
-        f0 = 1.0 / dur
-        return drift((f0, 0.10 * sign, 0.0), (2 * f0, 0.05 * sign, 1.1),
-                     (3 * f0, 0.03 * sign, 2.3))
+    # --- Antenna philosophy (real-hardware noise feedback) -------------------
+    # The antennas are open-loop 9g-class hobby servos on GPIO (D13 left, D12
+    # right). On the physical robot the owner reported they are audibly noisy:
+    # PWM hobby servos buzz and chatter in proportion to how OFTEN and how FAST
+    # they are driven, not merely how far they travel. On a small desk robot that
+    # continuous buzz is intrusive and undermines the "alive" effect.
+    #
+    # So antennas are QUIET BY DEFAULT here: near-resting (often fully at rest) in
+    # the idle loops that may run for minutes on a dock, and motion is RESERVED
+    # for the moments where it carries meaning — a startle snap, a happy flick, a
+    # sad fold — where a small CRISP gesture still reads while a large slow sweep
+    # is exactly what made noise. Amplitudes were roughly halved across the
+    # library, and idle micro-motion (many slow direction reversals) was traded
+    # for long dwells. Please do not "helpfully" turn these back up: the head is
+    # what makes the duck feel alive; the antennas are punctuation. See the clips
+    # README for the full rationale.
+
+    # A gentle, slow, low-amplitude wander for the one 'restless' idle: a single
+    # sine over the loop => just two soft direction changes per loop with a long
+    # dwell, so the servo is nearly always resting. Seamless over its period.
+    def antenna_quiet_drift(sign=1.0, dur=8.0, amp=0.06):
+        return sine(1.0 / dur, amp * sign, 0.3)
 
     specs: List[ClipSpec] = []
 
@@ -324,8 +341,10 @@ def build_specs() -> List[ClipSpec]:
         neck_pitch=sine(f, 0.045, 0.0) + sine(2 * f, 0.012, 0.7),
         head_pitch=sine(f, 0.018, np.pi),          # counter-move, follow-through
         head_roll=sine(f, 0.010, 0.9),             # micro weight shift
-        antenna_l=drift((f, 0.09, 0.0), (2 * f, 0.04, 1.3)),
-        antenna_r=drift((f, 0.08, 0.5), (2 * f, 0.05, 0.2)),
+        # Antennas rest fully in the default dock background loop — the quietest
+        # option for a loop that may run for minutes (hardware-noise feedback).
+        antenna_l=ZERO,
+        antenna_r=ZERO,
     ))
 
     # 2) Slow scan: occasional slow left-right look with holds, breathing under.
@@ -341,8 +360,10 @@ def build_specs() -> List[ClipSpec]:
                        (6.5, -0.30, "smooth"), (8.0, -0.30, "hold"),
                        (11.0, 0.0, "smooth")], loop=True, duration=d),
         head_roll=sine(2 * f, 0.020, 0.4),         # slight roll trailing the yaw
-        antenna_l=antenna_idle(1.0, d),
-        antenna_r=antenna_idle(-1.0, d),
+        # Near-silent: rest, with one small gentle lift during the head scan so
+        # the antennas are not perpetually drifting (hardware-noise feedback).
+        antenna_l=pulse(3.25, 1.6, 0.06),
+        antenna_r=pulse(3.25, 1.6, 0.05),
     ))
 
     # 3) Micro look-around: non-periodic-feeling wander (detuned sines) + shifts.
@@ -357,8 +378,10 @@ def build_specs() -> List[ClipSpec]:
         head_yaw=drift((f, 0.12, 0.3), (2 * f, 0.07, 1.7), (3 * f, 0.04, 0.9)),
         head_roll=drift((f, 0.05, 1.2), (2 * f, 0.03, 0.1)),
         head_pitch=drift((2 * f, 0.02, 0.5)),
-        antenna_l=antenna_idle(1.0, d),
-        antenna_r=antenna_idle(-1.0, d),
+        # The 'restless' idle keeps a gentle slow drift, but much reduced: one
+        # slow low-amplitude wander rather than perpetual micro-motion.
+        antenna_l=antenna_quiet_drift(1.0, d),
+        antenna_r=antenna_quiet_drift(-1.0, d),
     ))
 
     # ---- B. Curiosity / attention (once) ------------------------------------
@@ -373,8 +396,8 @@ def build_specs() -> List[ClipSpec]:
         head_yaw=keys([(0.0, 0.0), (0.7, 0.07, "ease_out"), (1.8, 0.07, "hold"),
                        (2.6, 0.0, "smooth")]),
         neck_pitch=pulse(0.8, 0.9, -0.03),          # tiny perk into the tilt
-        antenna_l=keys([(0.0, 0.0), (0.7, 0.35, "ease_out"), (2.6, 0.0)]),
-        antenna_r=keys([(0.0, 0.0), (0.8, 0.28, "ease_out"), (2.6, 0.0)]),
+        antenna_l=keys([(0.0, 0.0), (0.7, 0.18, "ease_out"), (2.6, 0.0)]),
+        antenna_r=keys([(0.0, 0.0), (0.8, 0.14, "ease_out"), (2.6, 0.0)]),
         events=(("eye", "blink", 0.85),),
     ))
 
@@ -388,8 +411,8 @@ def build_specs() -> List[ClipSpec]:
         neck_pitch=keys([(0.0, 0.0), (0.8, 0.04, "ease_out"), (1.5, 0.04, "hold"),
                          (2.2, 0.0)]),
         head_pitch=keys([(0.0, 0.0), (0.8, 0.03, "ease_out"), (2.2, 0.0)]),
-        antenna_l=keys([(0.0, 0.0), (0.7, 0.30, "ease_out"), (2.2, 0.05)]),
-        antenna_r=keys([(0.0, 0.0), (0.7, 0.22, "ease_out"), (2.2, 0.05)]),
+        antenna_l=keys([(0.0, 0.0), (0.7, 0.15, "ease_out"), (2.2, 0.05)]),
+        antenna_r=keys([(0.0, 0.0), (0.7, 0.11, "ease_out"), (2.2, 0.05)]),
     ))
 
     # 6) Double-take: glance one way, snap back the other, settle. Blink on snap.
@@ -402,8 +425,8 @@ def build_specs() -> List[ClipSpec]:
                        (2.4, 0.0, "smooth")]),
         head_roll=pulse(1.2, 0.4, -0.06),           # counter-roll on the snap
         neck_pitch=pulse(1.2, 0.5, -0.03),
-        antenna_l=keys([(0.0, 0.0), (1.15, 0.45, "ease_out"), (2.4, 0.0)]),
-        antenna_r=keys([(0.0, 0.0), (1.15, 0.38, "ease_out"), (2.4, 0.0)]),
+        antenna_l=keys([(0.0, 0.0), (1.15, 0.22, "ease_out"), (2.4, 0.0)]),
+        antenna_r=keys([(0.0, 0.0), (1.15, 0.19, "ease_out"), (2.4, 0.0)]),
         events=(("eye", "blink", 1.15),),
     ))
 
@@ -417,10 +440,12 @@ def build_specs() -> List[ClipSpec]:
         head_pitch=keys([(0.0, 0.0), (0.35, -0.12, "ease_out"), (1.2, -0.10, "hold"),
                          (1.8, 0.0)]),
         head_yaw=pulse(1.0, 0.5, 0.12),             # a quick look-around at the top
-        antenna_l=keys([(0.0, 0.0), (0.3, 0.8, "ease_out"), (1.3, 0.7, "hold"),
-                        (1.8, 0.1)]),
-        antenna_r=keys([(0.0, 0.0), (0.3, 0.8, "ease_out"), (1.3, 0.7, "hold"),
-                        (1.8, 0.1)]),
+        # Perk gesture preserved (crisp raise + hold) but the excursion halved —
+        # "ears up" still reads without driving the servo to a loud extreme.
+        antenna_l=keys([(0.0, 0.0), (0.3, 0.4, "ease_out"), (1.3, 0.35, "hold"),
+                        (1.8, 0.05)]),
+        antenna_r=keys([(0.0, 0.0), (0.3, 0.4, "ease_out"), (1.3, 0.35, "hold"),
+                        (1.8, 0.05)]),
         events=(("eye", "wide", 0.3),),
     ))
 
@@ -433,8 +458,8 @@ def build_specs() -> List[ClipSpec]:
                        (3.4, 0.40, "smooth"), (4.0, 0.0, "ease_in")]),
         neck_pitch=sine(0.25, 0.03, 0.0),
         head_roll=keys([(0.0, 0.0), (1.4, -0.06), (3.4, 0.06), (4.0, 0.0)]),
-        antenna_l=keys([(0.0, 0.05), (2.0, 0.25), (4.0, 0.05)]),
-        antenna_r=keys([(0.0, 0.05), (2.0, 0.20), (4.0, 0.05)]),
+        antenna_l=keys([(0.0, 0.03), (2.0, 0.12), (4.0, 0.03)]),
+        antenna_r=keys([(0.0, 0.03), (2.0, 0.10), (4.0, 0.03)]),
     ))
 
     # ---- C. Expressive reactions (once) -------------------------------------
@@ -446,8 +471,8 @@ def build_specs() -> List[ClipSpec]:
         doc="Affirmative double nod (yes). Small enough to use in any mode.",
         head_pitch=(pulse(0.55, 0.4, 0.20) + pulse(1.25, 0.4, 0.17)),
         neck_pitch=(pulse(0.55, 0.45, 0.05) + pulse(1.25, 0.45, 0.04)),
-        antenna_l=pulse(0.55, 0.7, 0.20),
-        antenna_r=pulse(0.55, 0.7, 0.16),
+        antenna_l=pulse(0.55, 0.7, 0.10),
+        antenna_r=pulse(0.55, 0.7, 0.08),
     ))
 
     # 10) No-shake: head yaw oscillation, antennas trailing (follow-through).
@@ -458,8 +483,8 @@ def build_specs() -> List[ClipSpec]:
         head_yaw=(pulse(0.55, 0.35, 0.34) + pulse(1.1, 0.35, -0.34)
                   + pulse(1.6, 0.32, 0.22)),
         head_roll=sine(1.4, 0.03, 0.0),
-        antenna_l=(pulse(0.7, 0.5, 0.25) + pulse(1.25, 0.5, -0.15)),  # trailing
-        antenna_r=(pulse(0.7, 0.5, 0.20) + pulse(1.25, 0.5, -0.12)),
+        antenna_l=(pulse(0.7, 0.5, 0.12) + pulse(1.25, 0.5, -0.08)),  # trailing
+        antenna_r=(pulse(0.7, 0.5, 0.10) + pulse(1.25, 0.5, -0.06)),
     ))
 
     # 11) Happy bounce: neck bob up + a bright antenna flick (event on the flick).
@@ -470,8 +495,12 @@ def build_specs() -> List[ClipSpec]:
         neck_pitch=(pulse(0.45, 0.35, -0.10) + pulse(1.0, 0.35, -0.08)),
         head_pitch=(pulse(0.45, 0.35, -0.10) + pulse(1.0, 0.35, -0.08)),
         head_roll=pulse(1.3, 0.5, 0.08),
-        antenna_l=(pulse(0.45, 0.28, 0.9) + pulse(1.0, 0.28, 0.7)),
-        antenna_r=(pulse(0.45, 0.28, 0.9) + pulse(1.0, 0.28, 0.7)),
+        # The flick is this clip's read, so it is preserved — but as a small CRISP
+        # flick (excursion halved, and the width eased out just enough to stay
+        # within the lowered antenna slew cap). A big fast antenna sweep is what
+        # buzzed on hardware; a quick low flick still says "delight".
+        antenna_l=(pulse(0.45, 0.34, 0.45) + pulse(1.0, 0.34, 0.35)),
+        antenna_r=(pulse(0.45, 0.34, 0.45) + pulse(1.0, 0.34, 0.35)),
         events=(("antenna", "flick", 0.45), ("eye", "happy", 0.45)),
     ))
 
@@ -485,9 +514,11 @@ def build_specs() -> List[ClipSpec]:
         head_pitch=keys([(0.0, 0.0), (1.1, 0.14, "ease_out"), (2.2, 0.13, "hold"),
                          (3.2, 0.0, "smooth")]),
         head_roll=sine(0.3, 0.03, 0.0),
-        antenna_l=keys([(0.0, 0.0), (1.1, -0.55, "ease_out"), (2.4, -0.5, "hold"),
+        # Fold-back preserved but shallower: a moderate fold still reads dejected
+        # while cutting the large slow sweep that made noise on hardware.
+        antenna_l=keys([(0.0, 0.0), (1.1, -0.30, "ease_out"), (2.4, -0.28, "hold"),
                         (3.2, 0.0)]),
-        antenna_r=keys([(0.0, 0.0), (1.1, -0.55, "ease_out"), (2.4, -0.5, "hold"),
+        antenna_r=keys([(0.0, 0.0), (1.1, -0.30, "ease_out"), (2.4, -0.28, "hold"),
                         (3.2, 0.0)]),
         eyes=((0.0, 1), (1.0, 0), (1.35, 1)),       # a slow blink as it sinks
     ))
@@ -503,9 +534,13 @@ def build_specs() -> List[ClipSpec]:
                          (1.6, 0.0)]),
         head_roll=pulse(0.6, 0.35, -0.09),          # flinch to one side
         head_yaw=pulse(0.85, 0.4, 0.12),            # dart a glance
-        antenna_l=keys([(0.0, 0.0), (0.15, 0.9, "ease_out"), (0.9, 0.4, "smooth"),
+        # The snap is the read (fast + crisp = alarm), so it is preserved — but
+        # the excursion is halved AND the front-loaded velocity is gentled with a
+        # smooth ease so it stays within the (lowered) antenna slew cap: the
+        # antenna no longer slams, which is what buzzed on hardware.
+        antenna_l=keys([(0.0, 0.0), (0.25, 0.5, "smooth"), (0.9, 0.2, "smooth"),
                         (1.6, 0.05)]),
-        antenna_r=keys([(0.0, 0.0), (0.15, 0.9, "ease_out"), (0.9, 0.4, "smooth"),
+        antenna_r=keys([(0.0, 0.0), (0.25, 0.5, "smooth"), (0.9, 0.2, "smooth"),
                         (1.6, 0.05)]),
         events=(("eye", "wide", 0.1),),
     ))
@@ -523,8 +558,10 @@ def build_specs() -> List[ClipSpec]:
         head_yaw=drift((f, 0.28, 0.2), (2 * f, 0.10, 1.4)),
         head_roll=drift((f, 0.05, 0.8)),
         neck_pitch=sine(f, 0.03, 0.0),
-        antenna_l=antenna_idle(1.0, d),
-        antenna_r=antenna_idle(-1.0, d),
+        # Gentle slow drift only, halved from the old idle shimmer (quiet by
+        # default; the head carries the "looking around" read while walking).
+        antenna_l=antenna_quiet_drift(1.0, d),
+        antenna_r=antenna_quiet_drift(-1.0, d),
     ))
 
     # 15) Alert while walking: a contained perk + a small look, once. Authored
@@ -540,9 +577,9 @@ def build_specs() -> List[ClipSpec]:
                          (2.0, 0.0, "smooth")]),
         head_yaw=keys([(0.0, 0.0), (0.5, 0.34, "ease_out"), (0.95, 0.32, "hold"),
                        (2.0, 0.0, "smooth")]),
-        antenna_l=keys([(0.0, 0.0), (0.35, 0.5, "ease_out"), (1.4, 0.4, "hold"),
+        antenna_l=keys([(0.0, 0.0), (0.35, 0.25, "ease_out"), (1.4, 0.2, "hold"),
                         (2.0, 0.05)]),
-        antenna_r=keys([(0.0, 0.0), (0.35, 0.5, "ease_out"), (1.4, 0.4, "hold"),
+        antenna_r=keys([(0.0, 0.0), (0.35, 0.25, "ease_out"), (1.4, 0.2, "hold"),
                         (2.0, 0.05)]),
         events=(("eye", "blink", 0.4),),
     ))

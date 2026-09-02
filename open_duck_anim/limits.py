@@ -31,10 +31,18 @@ import numpy as np
 MAX_MOTOR_VELOCITY = 5.24  # rad/s
 
 # Default normalised antenna slew rate (units of the [-1,1] track per second).
-# The plan mandates a separate slew limit but gives no numeric constant, so we
-# choose a documented, conservative default: full [-1,1] span (=2.0) traversed
-# in ~0.25 s => 8.0 units/s. Tunable per-deployment to avoid stall-holds.
-DEFAULT_ANTENNA_SLEW = 8.0  # normalised units / s
+# The plan mandates a separate antenna slew limit but gives no numeric constant.
+# This value was LOWERED from an earlier arbitrary 8.0 (full [-1,1] span in
+# ~0.25 s) to 4.0 (full span in ~0.5 s) in response to real-hardware feedback:
+# the robot's owner reported the open-loop 9g hobby antenna servos (GPIO D13/D12)
+# were audibly noisy — PWM hobby servos buzz and chatter in proportion to how
+# fast and how often they are driven. A lower global cap is defence-in-depth so
+# that *any* clip, including ones authored in the future, cannot drive the
+# antennas harshly regardless of what its tracks request. The shipped clip
+# library is authored to stay within this cap (peak authored slew ~3.8 units/s),
+# so at runtime this limiter is a no-op on the current clips — it only bites on
+# pathological or future over-driven motion. Still tunable per-deployment.
+DEFAULT_ANTENNA_SLEW = 4.0  # normalised units / s
 
 ArrayLike = Union[np.ndarray, Sequence[float]]
 

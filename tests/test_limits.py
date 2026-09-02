@@ -59,6 +59,20 @@ def test_antenna_slew_and_clamp():
     assert out2[0] <= 1.0
 
 
+def test_default_antenna_slew_pinned_to_hardware_value():
+    """Pin the global antenna slew cap. It was lowered from an arbitrary 8.0 to
+    4.0 normalised units/s (full [-1,1] span in ~0.5 s) after real-hardware
+    feedback that the open-loop 9g hobby antenna servos were audibly noisy; a
+    lower cap is defence-in-depth so no clip can drive them harshly. The shipped
+    clip library is authored to stay within this cap, so the limiter is a no-op
+    on current clips. If this constant changes, update limits.py's rationale
+    docstring and the clips README antenna philosophy to match."""
+    assert limits.DEFAULT_ANTENNA_SLEW == 4.0
+    assert limits.AntennaSlewLimiter().max_slew == 4.0
+    # A gentle full-span traversal takes ~0.5 s at this cap.
+    assert 2.0 / limits.DEFAULT_ANTENNA_SLEW == pytest.approx(0.5)
+
+
 def test_antenna_slew_clamps_normalised_joint_rate_does_not():
     # Structural difference, not a numeric-inequality tautology: the antenna slew
     # limiter clamps its output to the normalised [-1,1] range, while the joint

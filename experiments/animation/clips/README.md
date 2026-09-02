@@ -60,6 +60,45 @@ idles use `0.0` (they are the always-on background), `startle` blends **in**
 fast (`0.05 s`) so the recoil lands, and `sad_droop` blends slowly (`0.4 / 0.5`)
 so it settles rather than snaps.
 
+## Antennas: quiet by default (hardware-noise rationale)
+
+**Please read this before turning any antenna amplitude back up.**
+
+The antennas are open-loop 9g-class hobby servos on GPIO (D13 left, D12 right).
+On the physical robot the owner reported they are **audibly noisy**: PWM hobby
+servos buzz and chatter in proportion to how **often** and how **fast** they are
+driven — not merely how far they travel. On a small desk/dock robot that
+continuous buzz is intrusive and *undermines* the "alive" effect rather than
+adding to it. This is mechanical/acoustic, not a software bug.
+
+So the library treats antennas as **punctuation, not a heartbeat**:
+
+* **Quiet by default.** The idle loops that may run for minutes on a dock are
+  near-silent. `idle_breathe` (the default background loop) rests its antennas
+  **fully**; `idle_scan` rests with a single small lift during its head scan;
+  `idle_lookaround` and `walk_look_around` keep only a slow, low-amplitude drift
+  (one gentle wander per loop, long dwell). `idle_alive` keeps a gentle reduced
+  drift. Perpetual micro-motion — the thing that produces continuous buzzing —
+  is gone.
+* **Motion reserved for meaning.** Antennas move where the gesture *carries* the
+  read: the `startle` snap, the `happy_bounce` flick, the `sad_droop` fold, the
+  `perk_up`/`walk_alert` raise. In each case the **gesture is preserved but the
+  excursion is roughly halved**, because a small crisp flick still reads as
+  delight/alarm while a large slow sweep is exactly what made noise.
+* **Slew-capped in depth.** The global antenna slew cap (`DEFAULT_ANTENNA_SLEW`
+  in `open_duck_anim/limits.py`) was lowered from an arbitrary `8.0` to `4.0`
+  normalised units/s (a full `[-1,1]` traversal now takes ~0.5 s instead of
+  ~0.25 s) so that *any* clip — including future ones — cannot drive the
+  antennas harshly regardless of what its tracks request. The shipped clips are
+  authored to sit **within** this cap (peak authored slew ~3.8 units/s), so the
+  runtime limiter is a no-op on them today; it only bites on pathological or
+  future over-driven motion. `tests/test_limits.py` pins the constant.
+
+If a future author wants livelier antennas, prefer adding a *brief, purposeful*
+gesture to a specific reaction over restoring perpetual idle drift, and keep the
+peak slew under the cap. The head — not the antennas — is what makes the duck
+feel alive.
+
 ## Safety envelope (why nothing is clamped)
 
 The derated ×0.5 per-channel ceilings are roughly `neck ±0.12`, `head_pitch
