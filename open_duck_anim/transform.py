@@ -23,6 +23,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from .envelope import HeadEnvelope, DEFAULT_ENVELOPE
+
 # Head channel order within commands[3:7] (plan §3.3 / §6.3).
 HEAD_CHANNELS: Tuple[str, str, str, str] = (
     "neck_pitch",
@@ -82,9 +84,22 @@ def pose_to_command(
     base_command: np.ndarray = NOMINAL_HEAD_POSE,
     joystick_offset: Optional[np.ndarray] = None,
     authored_nominal_pose: np.ndarray = NOMINAL_HEAD_POSE,
+    head_envelope: "HeadEnvelope" = DEFAULT_ENVELOPE,
     out: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Full plan §6.3 transform: absolute authored head pose → clamped command.
+    """Full plan §6.3 transform: absolute authored head pose → safe command.
+
+    SAFETY (reviewer E3, plan §6.5/D13): the training-range clamp alone is NOT
+    balance-safe — it permits ``neck_pitch`` to +1.1 and ``head_yaw`` to -1.5,
+    well past the measured topple onsets. So this transform routes its output
+    through the D13 safety envelope by DEFAULT (``head_envelope=DEFAULT_ENVELOPE``):
+    per-channel deflection clamp + combined L2 budget. Enforcement is OPT-OUT —
+    to obtain the raw training-range command you must pass the explicit, greppable
+    ``head_envelope=HeadEnvelope.unbounded()`` sentinel, so the decision is
+    auditable. NOTE: this static path applies deflection + combined limits but
+    NOT the slew/rate guard (that needs per-tick state); drive dynamic/authored
+    motion through :class:`open_duck_anim.blend.Engine`, which owns the clock and
+    applies the full envelope including slew.
 
     Args:
         authored_head_pose: length-4 absolute authored head angles.
@@ -93,13 +108,21 @@ def pose_to_command(
         joystick_offset: optional length-4 additive gaze offset (plan §6.3:
             "joystick composes additively"). ``None`` means no offset.
         authored_nominal_pose: the clip's neutral head pose (default zero).
+        head_envelope: the D13 safety envelope to enforce (default
+            :data:`~open_duck_anim.envelope.DEFAULT_ENVELOPE`). Pass
+            ``HeadEnvelope.unbounded()`` to deliberately disable it.
         out: optional preallocated length-4 output buffer (hot-path friendly).
 
-    Returns the length-4 head command, clamped to the training ranges.
+    Returns the length-4 head command: clamped to the training ranges, then
+    enforced through ``head_envelope`` (deflection + combined budget).
     """
     delta = animation_delta(authored_head_pose, authored_nominal_pose)
     base = np.asarray(base_command, dtype=np.float64)
     command = base + delta
     if joystick_offset is not None:
         command = command + np.asarray(joystick_offset, dtype=np.float64)
-    return clamp_training_range(command, out=out)
+    command = clamp_training_range(command)
+    # D13/R16 balance-safety envelope (deflection + combined budget). The
+    # command channels are deflections from the (zero) nominal head pose, i.e.
+    # exactly the quantity the S0.1 sweep drove, so the envelope applies directly.
+    return head_envelope.clamp(command, out=out)

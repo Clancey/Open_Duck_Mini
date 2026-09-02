@@ -72,7 +72,10 @@ from .blend import (
     T_BETA,
 )
 
-# Transform (plan §6.3)
+# Transform (plan §6.3). NOTE: ``pose_to_command`` enforces the D13/R16 balance
+# envelope by DEFAULT (reviewer E3); ``clamp_training_range`` does NOT — it only
+# clamps to the (unsafe) training ranges and must never drive hardware directly
+# without the envelope. See ``transform.pose_to_command`` and ``envelope``.
 from .transform import (
     pose_to_command,
     animation_delta,
@@ -89,6 +92,20 @@ from .limits import (
     AntennaSlewLimiter,
     MAX_MOTOR_VELOCITY,
     DEFAULT_ANTENNA_SLEW,
+)
+
+# Head safety envelope (plan §6.5, defect D13 / risk R16)
+from .envelope import (
+    HeadEnvelope,
+    clamp_head_envelope,
+    DEFAULT_ENVELOPE,
+    DEFLECTION_LIMITS,
+    DEFLECTION_LOW,
+    DEFLECTION_HIGH,
+    SLEW_LIMIT,
+    COMBINED_L2_BUDGET,
+    SAFETY_FRACTION,
+    HARDWARE_DERATING,
 )
 
 __all__ = [
@@ -116,4 +133,8 @@ __all__ = [
     # limits
     "JointLimiter", "JointRateLimiter", "AntennaSlewLimiter",
     "MAX_MOTOR_VELOCITY", "DEFAULT_ANTENNA_SLEW",
+    # envelope (D13/R16)
+    "HeadEnvelope", "clamp_head_envelope", "DEFAULT_ENVELOPE",
+    "DEFLECTION_LIMITS", "DEFLECTION_LOW", "DEFLECTION_HIGH",
+    "SLEW_LIMIT", "COMBINED_L2_BUDGET", "SAFETY_FRACTION", "HARDWARE_DERATING",
 ]

@@ -15,6 +15,7 @@ import pytest
 
 from open_duck_anim import Engine, Triggers, compiler
 from open_duck_anim import clip as clipmod
+from open_duck_anim.envelope import HeadEnvelope
 
 from _helpers import make_meta, make_source_text
 
@@ -65,7 +66,12 @@ def test_engine_outputs_match_golden():
     tol = g["tolerance"]
     d = compiler.compile_to_dict(src, meta)
     c = clipmod.clip_from_dict(d)
-    eng = Engine()
+    # The golden guards COMPILER + COMPOSITOR numeric determinism (cross-platform
+    # drift), so it runs with the D13 safety envelope DELIBERATELY disabled
+    # (reviewer E3) — the committed vectors are raw composited head deltas, and
+    # decoupling them from the (separately tested) safety constants keeps this
+    # regression guard stable across envelope re-derivations.
+    eng = Engine(head_envelope=HeadEnvelope.unbounded())
     eng.evaluate(0.0, "stand", Triggers(clips=[c]))
     for row in g["samples"]:
         out = eng.evaluate(row["t"], "stand")

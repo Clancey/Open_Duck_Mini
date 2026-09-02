@@ -5,17 +5,25 @@ import pytest
 
 from open_duck_anim import Engine, Triggers
 from open_duck_anim.clip import DiscreteEvent
+from open_duck_anim.envelope import HeadEnvelope
 
 from _helpers import make_clip
 
 HEAD_YAW = 2
 
 
+def raw_engine(**kw):
+    """Engine with the D13 safety envelope disabled (reviewer E3) so these
+    clock/phase-mechanics tests observe the raw phase-driven head value rather
+    than the enforced/scaled one (the default Engine now clamps by default)."""
+    return Engine(head_envelope=HeadEnvelope.unbounded(), **kw)
+
+
 def test_phase_from_elapsed_time_not_tick_count():
     # head_yaw ramps 0→0.5 over 20 frames (0.4s). The value must depend on
     # elapsed time, not on the number of evaluate() calls.
     c = make_clip(loop_mode="clamp", head_yaw_end=0.5, blend_in_s=0.0, blend_out_s=0.0)
-    eng = Engine()
+    eng = raw_engine()
     eng.evaluate(0.0, "stand", Triggers(clips=[c]))
     # jump straight to t=0.2 (halfway) — value should be ~0.25 regardless of
     # having skipped the intermediate ticks.
@@ -26,7 +34,7 @@ def test_phase_from_elapsed_time_not_tick_count():
 
 def test_skipped_frames_land_on_correct_time():
     c = make_clip(loop_mode="clamp", head_yaw_end=0.5, blend_in_s=0.0, blend_out_s=0.0)
-    eng_smooth = Engine()
+    eng_smooth = raw_engine()
     eng_smooth.evaluate(0.0, "stand", Triggers(clips=[c]))
     # advance smoothly
     v_smooth = None
@@ -35,7 +43,7 @@ def test_skipped_frames_land_on_correct_time():
         t += 0.02
         v_smooth = eng_smooth.evaluate(t, "stand").head_command_offsets[HEAD_YAW]
 
-    eng_jump = Engine()
+    eng_jump = raw_engine()
     eng_jump.evaluate(0.0, "stand", Triggers(clips=[c]))
     v_jump = eng_jump.evaluate(t, "stand").head_command_offsets[HEAD_YAW]
     assert v_jump == pytest.approx(v_smooth, abs=1e-6)

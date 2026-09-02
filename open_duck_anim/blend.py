@@ -43,11 +43,19 @@ import numpy as np
 from .clip import DuckAnimClip, DiscreteEvent
 from .joint_order import HW_ORDER_14, HEAD_SLICE_16, INIT_POS_14
 from .transform import TRAINING_LOW, TRAINING_HIGH, NOMINAL_HEAD_POSE
+from .envelope import HeadEnvelope, DEFAULT_ENVELOPE
 
 # Timing constants (plan §6.6).
 CTRL_DT = 0.02       # 50 Hz single clock
 T_ALPHA = 0.35       # body blend
 T_BETA = 0.10        # show blend
+# Upper clamp on the elapsed dt used for the head slew guard (reviewer E6). A
+# stalled control loop, a debugger pause, or a dropped tick can make the real
+# wall-clock dt arbitrarily large; feeding that straight into ``slew_limit*dt``
+# would authorise an effectively unlimited single-tick jump and silently defeat
+# the rate guard. We cap it at a few control periods so a late tick degrades to
+# "one generous but bounded step" rather than "no limit at all".
+MAX_SLEW_DT = 5.0 * CTRL_DT  # 0.10 s == 5 ticks
 
 # Modes (plan §6.2). Strings (Python 3.9-friendly; no Enum in the hot path).
 MODE_DOCK = "dock"
@@ -291,6 +299,7 @@ class Engine:
         background: Optional[DuckAnimClip] = None,
         max_layers: int = 4,
         head_joint_limits: Optional[tuple] = None,
+        head_envelope: Optional[HeadEnvelope] = None,
     ) -> None:
         self.background = background
         self.max_layers = max_layers
@@ -325,6 +334,48 @@ class Engine:
         # the caller is a fresh copy, so mutating these buffers is safe.
         self._head_buf = np.zeros(4, dtype=np.float64)
         self._scratch = np.zeros(4, dtype=np.float64)
+        # D13/R16 safety envelope on the additive head offset (plan §6.5).
+        # SAFETY-CRITICAL DEFAULT (reviewer E3): the envelope is OPT-OUT, not
+        # opt-in. A bare ``Engine()`` — and even ``Engine(head_envelope=None)`` —
+        # enforces ``DEFAULT_ENVELOPE`` so that no default/forgotten caller can
+        # drive the ADDITIVE head path to the toppling extremes measured in S0.1.
+        # To disable enforcement you must pass the explicit, greppable sentinel
+        # ``HeadEnvelope.unbounded()`` (used by pure compositor-math tests and
+        # authoring tools that never touch hardware). Enforcement is stateful
+        # (slew needs the previous ENFORCED offset and the real elapsed dt), so
+        # the Engine — which already owns the per-tick clock and state — is its
+        # natural home.
+        self.head_envelope = head_envelope if head_envelope is not None else DEFAULT_ENVELOPE
+        self._prev_head_offsets: Optional[np.ndarray] = None
+        self._last_t: Optional[float] = None
+        # Latched fault flag (reviewer E1). Set True whenever a non-finite head
+        # command (NaN/Inf from a bad joystick/telemetry sample or upstream math)
+        # had to be substituted by the envelope's last line of defence. It never
+        # clears on its own — the caller inspects ``head_fault`` and decides how
+        # to recover (e.g. hold, e-stop) and calls ``reset()`` deliberately.
+        self._head_fault: bool = False
+
+    @property
+    def head_fault(self) -> bool:
+        """True once a non-finite head command was substituted (reviewer E1).
+
+        Latches until :meth:`reset` is called. See plan §6.5. A caller running
+        real hardware should treat a rising edge as a telemetry/authoring fault
+        and take a deliberate recovery action rather than trusting head output.
+        """
+        return self._head_fault
+
+    def reset(self) -> None:
+        """Clear stateful head-path state and the latched fault (reviewer E1).
+
+        Provides an explicit recovery path so a single poisoned sample cannot
+        latch head output for the Engine's lifetime. Drops the slew reference
+        (``_prev_head_offsets``) and the clock so the next tick re-seeds cleanly
+        from the true command, and clears :attr:`head_fault`.
+        """
+        self._prev_head_offsets = None
+        self._last_t = None
+        self._head_fault = False
 
     # --- trigger handling -----------------------------------------------------
     def _owner(self) -> Optional[_ClipState]:
@@ -436,8 +487,18 @@ class Engine:
                 fired_events.extend(st.collect_events(t_now))
 
         # Layer 3: joystick additive head offset (plan §6.3), added in place.
+        # Finiteness guard (reviewer E1): a NaN/Inf joystick or telemetry sample
+        # summed here would poison ``comp_head`` and, once stored as the slew
+        # reference, latch head output for the Engine's lifetime. Substitute a
+        # non-finite offset with zero (drop just this contribution) and latch the
+        # fault so the caller can react; the envelope below is a second line of
+        # defence for non-finite values arriving via the authored path.
         if triggers.joystick_offset is not None:
-            comp_head += np.asarray(triggers.joystick_offset, dtype=np.float64)
+            joy = np.asarray(triggers.joystick_offset, dtype=np.float64)
+            if not np.all(np.isfinite(joy)):
+                self._head_fault = True
+                joy = np.where(np.isfinite(joy), joy, 0.0)
+            comp_head += joy
 
         # ``head_command_offsets`` is a RELATIVE delta (authored head pose −
         # nominal, plus joystick). Per plan §6.3 the clamp to the training ranges
@@ -446,6 +507,43 @@ class Engine:
         # must therefore return the UNCLAMPED delta here (H2). Subtracting the
         # (zero) nominal also yields a fresh array the caller owns.
         head_offsets = comp_head - NOMINAL_HEAD_POSE
+
+        # D13/R16 safety envelope on the additive offset (plan §6.5). Applied
+        # only in the BALANCING modes (stand/walk), where head_command_offsets is
+        # the balance-critical additive command. In DOCK the legs are docked (not
+        # balancing) and the head is driven via absolute ``head_targets``, so the
+        # balance envelope does not apply and — critically (reviewer E7) — the
+        # slew reference is FROZEN so a DOCK→STAND transition slews from the true
+        # last emitted STAND command, not a fictitious offset advanced during
+        # DOCK. ``HeadEnvelope.unbounded()`` is a pure passthrough (bypass) used
+        # to disable enforcement deliberately.
+        if mode != MODE_DOCK:
+            # Elapsed dt for the slew guard. Fall back to CTRL_DT on the first
+            # tick / after a backwards clock, and clamp the UPPER bound (reviewer
+            # E6) so a stalled loop or debugger pause cannot authorise an
+            # unbounded jump by inflating ``slew_limit*dt``.
+            if self._last_t is None or t_now <= self._last_t:
+                dt = CTRL_DT
+            else:
+                dt = min(t_now - self._last_t, MAX_SLEW_DT)
+            head_offsets, fault = self.head_envelope.clamp(
+                head_offsets,
+                prev_command_head=self._prev_head_offsets,
+                dt=dt,
+                return_fault=True,
+            )
+            if fault:
+                self._head_fault = True
+            # Refuse to store a non-finite slew reference (reviewer E1): clamp
+            # already sanitises, but guard defensively so a bug upstream cannot
+            # latch. If somehow non-finite, drop the reference (re-seed next tick)
+            # rather than poison every future tick via ``prev + clip(c-prev)``.
+            if np.all(np.isfinite(head_offsets)):
+                self._prev_head_offsets = head_offsets.copy()
+            else:
+                self._prev_head_offsets = None
+                self._head_fault = True
+            self._last_t = t_now
 
         show = TickShow(
             antenna_l=float(np.clip(comp_al, -1.0, 1.0)),
