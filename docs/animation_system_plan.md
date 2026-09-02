@@ -6,7 +6,7 @@ Engineering design document. Status: proposed. Audience: implementing engineers 
 
 1. [Executive summary](#1-executive-summary) — [1.1 What we learned](#11-what-we-learned-for-whoever-picks-this-up-next)
 2. [Goals and non-goals](#2-goals-and-non-goals) — incl. [Deferred / out-of-MVP](#deferred--out-of-mvp-discussed-not-deleted)
-3. [Current-state analysis](#3-current-state-analysis)
+3. [Current-state analysis](#3-current-state-analysis) — [3.1.1 where the code lives](#311-where-the-code-lives-forks-and-branches)
 4. [Target architecture](#4-target-architecture) — [4.3 Mode FSM](#43-mode-fsm)
 5. [The `.duckanim` clip format spec](#5-the-duckanim-clip-format-spec)
 6. [The animation engine spec](#6-the-animation-engine-spec) — [6.1 clock/orientation](#61-layers-clock-ownership-and-orientation), [6.2 capability matrix](#62-mode--channel-capability-matrix), [6.3 pose→command](#63-absolute-pose-to-relative-command-transform), [6.4 eval/output](#64-evaluation-and-output-contract), [6.5 safety](#65-safety-abort-e-stop-watchdog-and-thermal)
@@ -89,9 +89,22 @@ The following are designed for and discussed in this document but are explicitly
 | `apirrone/Open_Duck_Playground` | Apache-2.0; `main` + `episodic` | MJX + Brax PPO training, ONNX export | Reward split, episodic/standing policies |
 | `apirrone/Open_Duck_Mini_Runtime` | branch `v2` | On-robot runtime (Pi Zero 2W) | Additive head actuation (permanent), safe envelope, FSM |
 | `apirrone/Open_Duck_reference_motion_generator` | — | Placo gait → 59-float reference JSON → poly fit | Authoring/training format |
-| `pollen-robotics/Open_Duck_Blender` | Apache-2.0; git-lfs | Blender ≥4.3.2 rig + recording scripts | Fork target for the exporter |
+| `pollen-robotics/Open_Duck_Blender` | Apache-2.0; git-lfs | Blender rig + recording scripts | Exporter forked into `blender/` **in this repo** (not a separate fork); attribution preserved in `NOTICE`. Owner authors on **Blender 5.2.1 LTS** |
 | `PaulTR/Open_Duck_Mini_Animator` | Apache-2.0 | Web keyframe animator + Flask `/read`,`/play` on Pi | Live-preview endpoints; standalone player reference |
 | `rimim/AWD` | — | Isaac Gym AMP/ASE fork | Avoid (ASE non-functional) |
+
+### 3.1.1 Where the code lives (forks and branches)
+
+**Fork strategy (Q1, owner-decided):** all work lives on branches in the **owner's own forks**, not contributed upstream for now. The three training iterations were **all published deliberately — including the two that failed** — because this document cites them as the evidence for the head-actuation architecture (Decision A, [§7 Phase 5](#phase-5-optional--training-reward-experiments-completed)).
+
+| Upstream repo | Owner fork | Branch(es) |
+|---|---|---|
+| `apirrone/Open_Duck_Mini` | `Clancey/Open_Duck_Mini` | `clancey-blender-animation-sim2real` (all 11 commits) |
+| `apirrone/Open_Duck_Playground` | `Clancey/Open_Duck_Playground` *(newly created)* | `feature/leg-neck-reward-split` (iter 1, `3983a0e`); `feature/head-command-tracking` (iter 2, `13c246b`); `feature/head-passthrough-training` (iter 3, `08536e1` — produced the shipped policy) |
+| `apirrone/Open_Duck_Mini_Runtime` | `Clancey/Open_Duck_Mini_Runtime` | `feature/animation-engine` (`cd88b70`, based on upstream `v2`) |
+| `pollen-robotics/Open_Duck_Blender` | *(no fork)* | Exporter work lives in `blender/` inside `Clancey/Open_Duck_Mini`, Apache-2.0, upstream attribution in `NOTICE` |
+
+**Push gotcha (bit us once, will bite again).** The owner's `GH_TOKEN` **lacks the `workflow` scope**, so HTTPS pushes are **rejected for any commit that touches `.github/workflows/`**. Push over **SSH** instead — `git@github.com:Clancey/<repo>.git` — for those commits (or for all of them, to avoid the trap).
 
 ### 3.2 Data path: CAD → ONNX → Pi
 
@@ -509,6 +522,7 @@ The plan front-loads **risk** (three spikes first), then the dock demo (fastest 
 ### Phase 2 — Blender fork
 
 - **Objective:** Fork `pollen-robotics/Open_Duck_Blender`; fix **four** blocking defects; add clip metadata.
+- **Status (2026-09-02):** the exporter work lives in `blender/` inside this repo (not a separate fork — [§3.1.1](#311-where-the-code-lives-forks-and-branches)). The prior version blocker is **gone**: the owner has upgraded to **Blender 5.2.1 LTS** (build 2026-08-25), so verification no longer waits on an install. **Verification against 5.2.1 is under way.** New caveat: 5.x is a **major** version and may carry breaking `bpy` API changes relative to the 4.3 API the addon was written against — the addon's `bl_info` minimum version may need updating (R17).
 - **Tasks:** (a) replace timer-driven recorder with a deterministic `frame_set()` loop (D4); (b) fix antenna L/R index swap (D2); (c) **replace baked `±10°` knee/ankle offsets with a single explicit calibrated zero/sign/axis transform table (D11)**; (d) add Limit Rotation bone constraints mirroring `jnt_range`; (e) compute real foot contacts or explicitly zero the contact weight for non-stepping clips (D3); (f) add a clip-metadata panel (layer mask, blend times, loop mode, mode requirement); export 59-float JSON and compile `.duckanim`.
 - **Repos/files:** Blender fork (`assets/scripts/data_recording.py`, new panel), imports `open_duck_anim`.
 - **Acceptance:** re-recording the same scene twice yields byte-identical frames; **regression test asserts the zero pose and a set of known joint angles export within 1e-6 rad** (D11); antenna channels map correctly; exported clip passes the Phase 1a harness.
@@ -593,7 +607,7 @@ The plan front-loads **risk** (three spikes first), then the dock demo (fastest 
 | R2 | Head kp=8 (`:175-182`) causes visible lag/undershoot on fast head motion | High | Medium | Pre-compensate in authoring; optionally raise kp cautiously with a documented test; keep authored head velocities modest |
 | R3 | Mechanical head limits ("can break your duck's head" per runtime README) | Medium | High | Blender Limit Rotation constraints from `jnt_range` make out-of-range poses unauthorable; runtime clamps to `jnt_range` |
 | R4 | Retraining cost/time (Phase 5) | Medium | Medium | Training is offline and parallelizable; start early; reuse existing PPO/MJX config; dock demo (Phase 3) ships value without it |
-| R5 | Fork-maintenance burden across four upstream repos | Medium | Medium | Concentrate shared logic in `open_duck_anim/`; keep fork diffs minimal and upstreamable; decide upstream vs private-fork policy (see Q1) |
+| R5 | Fork-maintenance burden across four upstream repos | Medium | Medium | Concentrate shared logic in `open_duck_anim/`; keep fork diffs minimal and upstreamable; **fork policy resolved (Q1): work stays on the owner's own forks, not upstreamed for now — see [§3.1.1](#311-where-the-code-lives-forks-and-branches)** |
 | R6 | Sim/real obs-length divergence (67 vs 101; stale comments D9); two-policy handoff invalidates action/`motor_targets` history | Medium | High | Reconcile explicitly in Phase 4; assert obs length against the ONNX input at startup; prefer single STAND+WALK policy; if two policies, seed history from outgoing policy + crossfade ≥10 ticks |
 | R7 | Degenerate contact term for Blender clips (D3, hardcoded `[1,1]`) | High | Low–Medium | Compute real contacts or zero `w_contact` for non-stepping clips; harmless for seated/dock, harmful for stepping |
 | R8 | Additive head path mistakenly deleted by a future contributor who reads it as a double-count (D1) ⇒ motionless head | Low | High | D1 documented as **correct-by-design**; add a code comment + a runtime test asserting head motion is present at nonzero command; do not gate on any "removal" |
@@ -605,18 +619,20 @@ The plan front-loads **risk** (three spikes first), then the dock demo (fastest 
 | R14 | **37.5 Hz low-pass above Nyquist** (25 Hz) at 50 Hz control (D12) — aliasing/meaningless if enabled as-is | Medium | Medium | Treat the constant as suspect; re-derive cutoff < 25 Hz from a lag budget; verify on discrete response; identical in sim and runtime or neither |
 | R15 | **Unsafe episodic exit** — authored endpoint moving or single-support (DF1) | Medium | High | Require start/end in a validated double-support envelope; asset validation rejects bad endpoints; explicit trained recovery segment (Phase 6) |
 | R16 | **REMAINING RISK TO EXPRESSIVENESS (REALISED then SUBSTANTIALLY MITIGATED; S0.1, D13): head animation topples the robot at large deflections.** Step inputs at `neck_pitch`/`head_yaw` extremes toppled the baseline policy in stand and walk (tilt ≈179°, z<0). The iteration-3 passthrough retrain resolved this in *sim*: the deflections that toppled the old policy now survive the full trained range with no fall, and the safe envelope widened (`head_yaw` −side unlocked, combined budget 0.55→1.0). It is **not closed** — sim is not reality and it must be re-confirmed on hardware | Realised → **mitigated (sim)** | High → **Medium** | Enforce the widened envelope (`open_duck_anim` limits), **pinned to the passthrough checkpoint** (re-derive on any policy change); re-confirm on hardware with the **×0.5 first-trial derating** still applied; never drive to range extremes with steps. Iteration 3 (PASSED) delivered the widening; further gains would need another passthrough-trained policy |
+| R17 | **Blender 5.x `bpy` API compatibility.** The owner upgraded to Blender 5.2.1 LTS (unblocking Phase 2 verification, Q5), but 5.x is a **major** version and may break `bpy` calls the addon was written against on the 4.3 API | Medium | Medium | Verify the exporter against 5.2.1 (in progress, Phase 2); update the addon's `bl_info` minimum version; pin/document the tested Blender version; fix any deprecated `bpy` calls surfaced by verification |
 
 ---
 
 ## 9. Open questions for the owner
 
-1. **Upstream vs private fork.** Should the Blender exporter fixes and reward split be contributed upstream (`pollen-robotics`, `apirrone`) or kept as private forks? This drives R5 and how we structure branches.
+1. **Upstream vs private fork — ANSWERED.** Keep the work on branches in the **owner's own forks**, not upstreamed for now. Fork/branch map and the SSH-vs-HTTPS `workflow`-scope push gotcha are in **[§3.1.1](#311-where-the-code-lives-forks-and-branches)**; the fork-maintenance risk is R5.
 2. **The dock.** Is the dock a passive stand (robot simply seated, legs held) or does it carry electronics/power? This decides whether DOCK_DEMO must coordinate with dock hardware or is purely on-robot.
 3. **Compute for retraining — FULLY ANSWERED AND EXERCISED.** The owner has an RTX 4090 workstation and a Docker host with an RTX 3090 (`tower.local`) with a working Docker/CUDA/JAX environment: measured **~68k steps/sec, 300M steps in ~1.2–1.5 h**. **Three** full 300M-step retrains have now run there (Phase 5 iterations 1–3), the last of which shipped. No cloud budget needed. Not time-critical — Phase 5 is off the critical path and now resolved.
 4. **Target clip library.** What is the initial set of animations to author (idle/breathing, curious, greeting, sad, alert, dance)? This scopes Phase 3 and Phase 6 content.
 5. **Head kp.** Are we permitted to raise head kp above 8 (with a documented mechanical-limit test), or must expressiveness live entirely within kp=8's tracking envelope?
 6. **Fault behaviour.** On e-stop/fault, do we want **torque-off** (robot goes limp — safe electrically, may fall/flop) or **controlled-hold** (holds last safe pose — better posture, keeps servos energised and warm)? This decides the `FAULT` policy in [§6.5](#65-safety-abort-e-stop-watchdog-and-thermal).
 7. **Single vs dual policy.** Is a single locomotion policy covering STAND+WALK (zero command = stand) acceptable, or must the `standing.py` perpetual policy remain separate? The single-policy route removes the observation-history handoff risk (R6).
+8. **Blender version — ANSWERED (blocker removed).** The owner upgraded to **Blender 5.2.1 LTS** (build 2026-08-25), clearing the previous "requires ≥4.3.2, machine has 4.1.1" blocker on Phase 2 verification. Verification against 5.2.1 is **in progress**; because 5.x is a major version, watch for breaking `bpy` API changes vs the 4.3 API the addon targets and update `bl_info` accordingly (R17, [Phase 2](#phase-2--blender-fork)).
 
 ---
 
