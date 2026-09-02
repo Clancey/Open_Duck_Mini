@@ -120,6 +120,19 @@ def test_mixer_layers_weights_groups_and_priority():
     assert mixer.mix(base)[3] == 0
 
 
+def test_mixer_duplicate_name_requires_replace_and_replaces_cleanly():
+    mixer = LayeredMixer()
+    first = AnimationPlayer(clip(name="first"))
+    second = AnimationPlayer(clip(name="second"))
+    mixer.add(first, name="gesture")
+
+    with pytest.raises(ValueError, match="gesture"):
+        mixer.add(second, name="gesture")
+
+    assert mixer.add(second, name="gesture", replace=True) == "gesture"
+    assert mixer.active_clips == {"gesture": second}
+
+
 def test_safety_limiter_clamps_slews_and_scrubs_nonfinite_values():
     limiter = JointSafetyLimiter(max_accel=None)
     previous = np.zeros(len(ALL_JOINTS), dtype=np.float32)

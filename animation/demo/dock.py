@@ -38,7 +38,12 @@ class _FallbackMixer:
     def __init__(self) -> None:
         self.active_clips: dict[str, _FallbackPlayer] = {}
 
-    def add(self, player: _FallbackPlayer, name: str | None = None) -> str:
+    def add(
+        self,
+        player: _FallbackPlayer,
+        name: str | None = None,
+        replace: bool = False,
+    ) -> str:
         name = name or player.clip.name
         self.active_clips[name] = player
         return name
@@ -120,7 +125,7 @@ class DockMode:
 
     def _play(self, clip_name: str, speed: float) -> None:
         player = AnimationPlayer(self.clips[clip_name], speed=speed)
-        self.mixer.add(player, name=clip_name)
+        self.mixer.add(player, name=clip_name, replace=True)
 
     def step(self, dt: float = 0.02) -> np.ndarray:
         base = self.docked_pose.copy()

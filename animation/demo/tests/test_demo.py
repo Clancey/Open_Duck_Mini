@@ -76,6 +76,17 @@ def test_dock_mode_legs_are_bitwise_docked_even_for_forced_clips():
         assert output[:10].tobytes() == pose[:10].tobytes()
 
 
+def test_dock_repeated_looping_clip_replays_without_moving_legs():
+    pose = np.linspace(-0.2, 0.2, len(ALL_JOINTS), dtype=np.float32)
+    dock = DockMode(clips_dir="animation/clips", docked_pose=pose, seed=7)
+    dock.scheduler.register("idle_breathe", cooldown=0)
+    for index in range(3000):
+        if index % 300 == 0:
+            assert dock.trigger("idle_breathe")
+        output = dock.step(0.02)
+        assert output[:10].tobytes() == pose[:10].tobytes()
+
+
 def test_dock_rejects_leg_clip():
     dock = DockMode(seed=5)
     assert not dock.register_clip(clip("unsafe", ["left_knee", "head_yaw"]))

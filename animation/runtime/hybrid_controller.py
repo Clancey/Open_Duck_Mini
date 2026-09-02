@@ -132,7 +132,7 @@ class HybridController:
             return False
         _, _, AnimationPlayer, _ = _duck_anim_dependencies()
         player = AnimationPlayer(clip, **kwargs)
-        self.mixer.add(player, name=clip_name)
+        self.mixer.add(player, name=clip_name, replace=True)
         return True
 
     def play_additive(self, clip_name: str, **kwargs: Any) -> bool:

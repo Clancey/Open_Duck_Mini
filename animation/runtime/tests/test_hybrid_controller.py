@@ -86,3 +86,13 @@ def test_output_stays_within_joint_limits() -> None:
     control = controller(offset=100.0)
     output = control.step(0.02, (0, 0, 0))
     assert np.all((JOINT_LIMITS[:, 0] <= output) & (output <= JOINT_LIMITS[:, 1]))
+
+
+def test_replaying_active_clip_restarts_without_raising() -> None:
+    control = HybridController(clips_dir="animation/clips")
+    assert control.set_mode(RobotMode.STAND)
+    assert control.play("nod_yes")
+    assert control.play("nod_yes")
+
+    output = control.step(0.02, (0, 0, 0))
+    assert np.all((JOINT_LIMITS[:, 0] <= output) & (output <= JOINT_LIMITS[:, 1]))

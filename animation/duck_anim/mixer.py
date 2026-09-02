@@ -18,10 +18,19 @@ class LayeredMixer:
         self._sequence = itertools.count()
         self._group_weights = {"legs": 1.0, "head": 1.0, "antennas": 1.0}
 
-    def add(self, player: AnimationPlayer, name: str | None = None) -> str:
-        """Add ``player`` and return its unique mixer name."""
+    def add(
+        self,
+        player: AnimationPlayer,
+        name: str | None = None,
+        replace: bool = False,
+    ) -> str:
+        """Add ``player`` and return its unique mixer name.
+
+        Explicit duplicate names raise by default. With ``replace=True``, the
+        existing player under ``name`` is replaced, restarting that clip.
+        """
         name = name or f"{player.clip.name}-{next(self._sequence)}"
-        if name in self._players:
+        if name in self._players and not replace:
             raise ValueError(f"An animation player named {name!r} already exists")
         self._players[name] = player
         return name
