@@ -60,31 +60,41 @@ idles use `0.0` (they are the always-on background), `startle` blends **in**
 fast (`0.05 s`) so the recoil lands, and `sad_droop` blends slowly (`0.4 / 0.5`)
 so it settles rather than snaps.
 
-## Antennas: quiet by default (hardware-noise rationale)
+## Antennas: never in idle loops (explicit owner decision)
 
-**Please read this before turning any antenna amplitude back up.**
+**Please read this before adding any antenna motion to a looping/idle clip.**
 
 The antennas are open-loop 9g-class hobby servos on GPIO (D13 left, D12 right).
 On the physical robot the owner reported they are **audibly noisy**: PWM hobby
-servos buzz and chatter in proportion to how **often** and how **fast** they are
-driven — not merely how far they travel. On a small desk/dock robot that
-continuous buzz is intrusive and *undermines* the "alive" effect rather than
-adding to it. This is mechanical/acoustic, not a software bug.
+servos buzz and chatter in proportion to how **often** they are driven — not
+merely how far they travel. On a small desk/dock robot that continuous buzz is
+intrusive and *undermines* the "alive" effect rather than adding to it. This is
+mechanical/acoustic, not a software bug.
+
+**Owner decision (watching the robot):** *"for the idle animations, I don't want
+to use the antennas. They are very noisy."* Taken literally and completely: a
+dock idle loop may run for many minutes continuously on a desk, so **any**
+antenna motion inside a loop is effectively continuous noise. An earlier pass
+only *reduced* idle antenna motion — that was not enough. The rule now is
+absolute.
 
 So the library treats antennas as **punctuation, not a heartbeat**:
 
-* **Quiet by default.** The idle loops that may run for minutes on a dock are
-  near-silent. `idle_breathe` (the default background loop) rests its antennas
-  **fully**; `idle_scan` rests with a single small lift during its head scan;
-  `idle_lookaround` and `walk_look_around` keep only a slow, low-amplitude drift
-  (one gentle wander per loop, long dwell). `idle_alive` keeps a gentle reduced
-  drift. Perpetual micro-motion — the thing that produces continuous buzzing —
-  is gone.
-* **Motion reserved for meaning.** Antennas move where the gesture *carries* the
-  read: the `startle` snap, the `happy_bounce` flick, the `sad_droop` fold, the
-  `perk_up`/`walk_alert` raise. In each case the **gesture is preserved but the
-  excursion is roughly halved**, because a small crisp flick still reads as
-  delight/alarm while a large slow sweep is exactly what made noise.
+* **Zero in every looping/idle clip.** Every clip with `loop_mode: "wrap"` (and
+  any background/idle layer, `priority` 0) holds the antennas at a **flat
+  constant** at the neutral rest value for the whole clip — the compiled
+  `show_functions.antenna_left` / `antenna_right` tracks are genuinely constant,
+  so the runtime issues no changing antenna command and the servos are never
+  asked to move. This covers `idle_breathe`, `idle_scan`, `idle_lookaround`,
+  `idle_alive`, and `walk_look_around`. There is no "gentle drift", no "single
+  small lift", no micro-motion — exactly zero. **Do not "improve" this by adding
+  idle antenna motion back in.** The guard test below makes it a hard failure.
+* **Motion reserved for brief triggered gestures.** Antennas move **only** in the
+  short `once` reactions where the gesture *carries* the read and is over in a
+  moment: the `startle` snap, the `happy_bounce` flick, the `sad_droop` fold, the
+  `perk_up`/`walk_alert` raise. A short crisp flick reads as delight/alarm and
+  then stops; it is not the sustained buzz the owner objected to. These are
+  deliberately kept.
 * **Slew-capped in depth.** The global antenna slew cap (`DEFAULT_ANTENNA_SLEW`
   in `open_duck_anim/limits.py`) was lowered from an arbitrary `8.0` to `4.0`
   normalised units/s (a full `[-1,1]` traversal now takes ~0.5 s instead of
@@ -94,10 +104,10 @@ So the library treats antennas as **punctuation, not a heartbeat**:
   runtime limiter is a no-op on them today; it only bites on pathological or
   future over-driven motion. `tests/test_limits.py` pins the constant.
 
-If a future author wants livelier antennas, prefer adding a *brief, purposeful*
-gesture to a specific reaction over restoring perpetual idle drift, and keep the
-peak slew under the cap. The head — not the antennas — is what makes the duck
-feel alive.
+If a future author wants livelier antennas, add a *brief, purposeful* gesture to
+a specific **triggered** reaction (a `once` clip) and keep the peak slew under
+the cap — **never** add antenna motion to a looping/idle clip. The head — not the
+antennas — is what makes the duck feel alive.
 
 ## Safety envelope (why nothing is clamped)
 

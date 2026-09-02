@@ -302,28 +302,30 @@ class ClipSpec:
 
 
 def build_specs() -> List[ClipSpec]:
-    # --- Antenna philosophy (real-hardware noise feedback) -------------------
+    # --- Antenna philosophy (explicit owner decision, measured HW noise) -----
     # The antennas are open-loop 9g-class hobby servos on GPIO (D13 left, D12
     # right). On the physical robot the owner reported they are audibly noisy:
-    # PWM hobby servos buzz and chatter in proportion to how OFTEN and how FAST
-    # they are driven, not merely how far they travel. On a small desk robot that
-    # continuous buzz is intrusive and undermines the "alive" effect.
+    # PWM hobby servos buzz and chatter in proportion to how OFTEN they are
+    # driven, not merely how far they travel. A dock idle loop may run for many
+    # minutes continuously on a desk, so *any* antenna motion inside a loop is
+    # effectively continuous buzz.
     #
-    # So antennas are QUIET BY DEFAULT here: near-resting (often fully at rest) in
-    # the idle loops that may run for minutes on a dock, and motion is RESERVED
-    # for the moments where it carries meaning — a startle snap, a happy flick, a
-    # sad fold — where a small CRISP gesture still reads while a large slow sweep
-    # is exactly what made noise. Amplitudes were roughly halved across the
-    # library, and idle micro-motion (many slow direction reversals) was traded
-    # for long dwells. Please do not "helpfully" turn these back up: the head is
-    # what makes the duck feel alive; the antennas are punctuation. See the clips
-    # README for the full rationale.
-
-    # A gentle, slow, low-amplitude wander for the one 'restless' idle: a single
-    # sine over the loop => just two soft direction changes per loop with a long
-    # dwell, so the servo is nearly always resting. Seamless over its period.
-    def antenna_quiet_drift(sign=1.0, dur=8.0, amp=0.06):
-        return sine(1.0 / dur, amp * sign, 0.3)
+    # OWNER DECISION (watching the robot): "for the idle animations, I don't want
+    # to use the antennas. They are very noisy." Taken literally: looping / idle
+    # clips move the antennas ZERO — the antenna tracks are a flat constant at the
+    # neutral rest value for the whole clip, so the runtime issues no changing
+    # antenna command and the servos are never asked to move. An earlier pass only
+    # REDUCED idle antenna motion; that was not enough, because any motion in a
+    # minutes-long loop still buzzes.
+    #
+    # Antenna motion is RESERVED for the brief triggered reactions (once clips) —
+    # a startle snap, a happy flick, a sad fold — where a short CRISP gesture
+    # carries meaning and is over in a moment, not sustained noise. Do NOT
+    # "helpfully" add antenna motion back into any looping / idle clip: the head
+    # is what makes the duck feel alive; the antennas are momentary punctuation
+    # only. The library guard test (tests/test_clip_library.py) enforces zero
+    # antenna motion in every loop_mode=="wrap" / background-layer clip. See the
+    # clips README for the full rationale.
 
     specs: List[ClipSpec] = []
 
@@ -360,10 +362,10 @@ def build_specs() -> List[ClipSpec]:
                        (6.5, -0.30, "smooth"), (8.0, -0.30, "hold"),
                        (11.0, 0.0, "smooth")], loop=True, duration=d),
         head_roll=sine(2 * f, 0.020, 0.4),         # slight roll trailing the yaw
-        # Near-silent: rest, with one small gentle lift during the head scan so
-        # the antennas are not perpetually drifting (hardware-noise feedback).
-        antenna_l=pulse(3.25, 1.6, 0.06),
-        antenna_r=pulse(3.25, 1.6, 0.05),
+        # Owner decision: idle/looping clips never move the antennas (measured
+        # hardware noise). Flat at rest for the whole loop — zero antenna command.
+        antenna_l=ZERO,
+        antenna_r=ZERO,
     ))
 
     # 3) Micro look-around: non-periodic-feeling wander (detuned sines) + shifts.
@@ -378,10 +380,10 @@ def build_specs() -> List[ClipSpec]:
         head_yaw=drift((f, 0.12, 0.3), (2 * f, 0.07, 1.7), (3 * f, 0.04, 0.9)),
         head_roll=drift((f, 0.05, 1.2), (2 * f, 0.03, 0.1)),
         head_pitch=drift((2 * f, 0.02, 0.5)),
-        # The 'restless' idle keeps a gentle slow drift, but much reduced: one
-        # slow low-amplitude wander rather than perpetual micro-motion.
-        antenna_l=antenna_quiet_drift(1.0, d),
-        antenna_r=antenna_quiet_drift(-1.0, d),
+        # Owner decision: idle/looping clips never move the antennas (measured
+        # hardware noise). Flat at rest for the whole loop — zero antenna command.
+        antenna_l=ZERO,
+        antenna_r=ZERO,
     ))
 
     # ---- B. Curiosity / attention (once) ------------------------------------
@@ -558,10 +560,11 @@ def build_specs() -> List[ClipSpec]:
         head_yaw=drift((f, 0.28, 0.2), (2 * f, 0.10, 1.4)),
         head_roll=drift((f, 0.05, 0.8)),
         neck_pitch=sine(f, 0.03, 0.0),
-        # Gentle slow drift only, halved from the old idle shimmer (quiet by
-        # default; the head carries the "looking around" read while walking).
-        antenna_l=antenna_quiet_drift(1.0, d),
-        antenna_r=antenna_quiet_drift(-1.0, d),
+        # Owner decision: idle/looping/background layers never move the antennas
+        # (measured hardware noise). This wrap loop can overlay a long walk, so
+        # it stays flat at rest — the head carries the "looking around" read.
+        antenna_l=ZERO,
+        antenna_r=ZERO,
     ))
 
     # 15) Alert while walking: a contained perk + a small look, once. Authored
