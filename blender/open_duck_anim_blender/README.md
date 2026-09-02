@@ -31,7 +31,16 @@ The Blender-facing shims import `bpy` guarded: `recorder`, `constraints`,
 ## Requirements
 
 - **Blender >= 4.3.2** (the upstream `open-duck-mini.blend` rig is saved as 4.03).
-  This addon's `bl_info` requires 4.3.2.
+  This addon's `bl_info` requires 4.3.2. Verified end-to-end on **Blender 5.2.1
+  LTS** against the real rig: the bpy API this addon uses (armature/pose bones,
+  `LIMIT_ROTATION` constraints, `rotation_euler`, `matrix_world`, `frame_set`,
+  `register_class` + `bpy.props` annotations, `save_as_mainfile`) is unchanged
+  across 4.3→5.x, so no code changes were needed for 5.x. It still installs as a
+  **legacy `bl_info` add-on** (`Edit > Preferences > Add-ons`, or
+  `bpy.ops.preferences.addon_enable`); a 4.2+ `blender_manifest.toml` *extension*
+  is **not** required. (5.x's slotted-Action API — `Action.fcurves` removed — does
+  not affect recording, which reads evaluated pose bones via `frame_set`, not
+  F-Curves.)
 - The `open_duck_anim` library on Blender's Python path (`pip install
   ./packaging/open_duck_anim`, or add the repo root to `PYTHONPATH`).
 

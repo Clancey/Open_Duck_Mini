@@ -95,7 +95,54 @@ def main():
     result = export_mod.export_and_compile(ep1, meta, src, out)
     assert os.path.exists(out), "no .duckanim produced"
     print("SMOKE: exported", os.path.basename(out), "sha", result["source_sha256"][:12])
+
+    # 4) root orientation must survive a QUATERNION-mode root bone. Reading
+    # rotation_euler on a quaternion-mode bone silently yields identity, which
+    # would corrupt frame[3:7] (root_quat, XYZW) for any body-turning motion.
+    check_root_quaternion_mode()
+
     print("SMOKE: ALL CHECKS PASSED")
+
+
+def check_root_quaternion_mode():
+    """Regression: quaternion-mode root exports a non-identity root_quat.
+
+    Builds a fresh armature, puts the ``root`` bone in QUATERNION mode with a
+    known +30° yaw (about Z), records one static frame, and asserts the exported
+    ``root_quat`` (frame[3:7], XYZW) is the expected rotation — NOT the identity
+    the old ``rotation_euler`` read produced.
+    """
+    import math
+
+    obj = build_armature()
+    root = obj.pose.bones["root"]
+    root.rotation_mode = "QUATERNION"
+    ang = math.radians(30.0)
+    # (w, x, y, z) for a rotation of `ang` about Z.
+    root.rotation_quaternion = (math.cos(ang / 2), 0.0, 0.0, math.sin(ang / 2))
+
+    scene = bpy.context.scene
+    scene.frame_start = scene.frame_end = 1
+    scene.frame_set(1)
+    bpy.context.view_layer.update()
+
+    rec = recorder.DataRecorder(fps=50, contacts_valid=False)
+    ep = rec.record()
+    root_quat = ep["Frames"][0][3:7]  # XYZW
+
+    identity = [0.0, 0.0, 0.0, 1.0]
+    dev = max(abs(a - b) for a, b in zip(root_quat, identity))
+    assert dev > 1e-3, (
+        "root_quat is identity %r — quaternion-mode root not read (regression)"
+        % (root_quat,)
+    )
+    # +30° yaw about Z, after the roll-negating remap (roll=0 here), is
+    # [0, 0, sin15°, cos15°] in XYZW.
+    expected = [0.0, 0.0, math.sin(ang / 2), math.cos(ang / 2)]
+    err = max(abs(a - b) for a, b in zip(root_quat, expected))
+    assert err < 1e-6, "root_quat %r != expected %r" % (root_quat, expected)
+    print("SMOKE: quaternion-mode root exported root_quat", 
+          [round(x, 4) for x in root_quat], "(non-identity, D-root fixed)")
 
 
 if __name__ == "__main__":

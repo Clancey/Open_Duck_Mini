@@ -155,6 +155,29 @@ def test_invalid_contacts_sentinel():
     assert contacts_mod.invalid_contacts() == [0, 0]
 
 
+def test_default_threshold_matches_real_rig_geometry():
+    """DEFAULT_CONTACT_THRESHOLD_M tuned to the real open-duck-mini.blend rig.
+
+    Verified on Blender 5.2.1: the toe bones travel ~29 mm vertically across the
+    shipped walk (median height ~15 mm). The default band sits at ~half that
+    travel so a walking gait reads ≳50% stance duty per foot, not the ~19% the
+    old 10 mm band produced. It must stay strictly below the ~29 mm swing apex so
+    a fully-lifted foot is still classified no-contact.
+    """
+    thr = contacts_mod.DEFAULT_CONTACT_THRESHOLD_M
+    assert thr == pytest.approx(0.015)
+    # measured toe-travel envelope on the real rig (metres above planted point).
+    TOE_LIFT_M = 0.029
+    TOE_MEDIAN_M = 0.0155
+    # band is below the swing apex (lifted foot never spuriously "in contact")…
+    assert thr < TOE_LIFT_M
+    # …and near the median dwell so contact duty is realistic (not degenerate).
+    assert thr == pytest.approx(TOE_MEDIAN_M, abs=0.002)
+    # a planted toe (near ground) is contact; a fully-lifted toe is not.
+    assert contacts_mod.compute_foot_contacts(0.0, TOE_LIFT_M, ground_z=0.0)[0] == 1
+    assert contacts_mod.compute_foot_contacts(0.0, TOE_LIFT_M, ground_z=0.0)[1] == 0
+
+
 def test_episode_carries_footcontactvalid_marker():
     ep_valid = export_mod.new_episode(fps=50, contacts_valid=True)
     ep_invalid = export_mod.new_episode(fps=50, contacts_valid=False)
@@ -309,3 +332,42 @@ def test_blender_shims_import_without_bpy():
     # Using a bpy-requiring entry point without Blender fails loudly, not silently.
     with pytest.raises(RuntimeError):
         recorder.DataRecorder()
+
+
+# --------------------------------------------------------------------------- #
+# Root orientation maths (bpy-free half of the QUATERNION-mode root fix). The
+# mode-agnostic *read* itself needs Blender and is covered by the Blender-side
+# check in blender/smoke_synthetic.py::check_root_quaternion_mode.
+# --------------------------------------------------------------------------- #
+def test_euler_to_quaternion_is_xyzw_identity():
+    from open_duck_anim_blender import recorder
+    q = recorder.euler_to_quaternion_xyzw(0.0, 0.0, 0.0)
+    # scipy as_quat / R.from_quat convention: XYZW, identity = [0,0,0,1].
+    assert np.allclose(q, [0.0, 0.0, 0.0, 1.0])
+
+
+def test_euler_to_quaternion_known_yaw():
+    from open_duck_anim_blender import recorder
+    # +90° yaw about Z → [0, 0, sin45°, cos45°] in XYZW.
+    q = recorder.euler_to_quaternion_xyzw(np.pi / 2, 0.0, 0.0)
+    assert np.allclose(q, [0.0, 0.0, np.sin(np.pi / 4), np.cos(np.pi / 4)], atol=1e-9)
+
+
+def test_root_frame_euler_negates_roll_only():
+    from open_duck_anim_blender import recorder
+    assert recorder.root_frame_euler_rpy(0.3, 0.1, 0.2) == [-0.3, 0.1, 0.2]
+
+
+def test_root_frame_quat_nonidentity_for_nonzero_rotation():
+    """A non-zero root Euler must export a non-identity quaternion (the exact
+    failure a QUATERNION-mode root would silently hide by reading as (0,0,0))."""
+    from open_duck_anim_blender import recorder
+    q = recorder.root_frame_quat_xyzw(0.0, 0.0, np.deg2rad(30.0))  # +30° yaw
+    assert not np.allclose(q, [0.0, 0.0, 0.0, 1.0])
+    # roll=0 here, so remap leaves yaw intact: [0,0,sin15°,cos15°].
+    assert np.allclose(
+        q, [0.0, 0.0, np.sin(np.deg2rad(15.0)), np.cos(np.deg2rad(15.0))], atol=1e-9
+    )
+    # unit quaternion
+    assert np.isclose(np.linalg.norm(q), 1.0)
+

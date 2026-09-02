@@ -20,6 +20,7 @@ import os
 from open_duck_anim.clip import LAYER_MASKS, LOOP_MODES, REQUIRES_MODES
 
 from . import constraints as constraints_mod
+from . import contacts as contacts_mod
 from . import export as export_mod
 from .metadata import ClipMetadata, head_envelope_warnings
 from .recorder import DataRecorder
@@ -63,7 +64,9 @@ if bpy is not None:  # pragma: no cover - all UI code runs only inside Blender
         )
         ground_z: bpy.props.FloatProperty(name="Ground Z (m)", default=0.0)
         contact_threshold: bpy.props.FloatProperty(
-            name="Contact Threshold (m)", default=0.01, min=0.0
+            name="Contact Threshold (m)",
+            default=contacts_mod.DEFAULT_CONTACT_THRESHOLD_M,
+            min=0.0,
         )
         output_dir: bpy.props.StringProperty(
             name="Output Dir", subtype="DIR_PATH", default="//duck_mini_data_records"

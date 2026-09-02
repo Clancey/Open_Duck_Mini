@@ -22,9 +22,18 @@ from __future__ import annotations
 from typing import List, Tuple
 
 # Default: a foot whose lowest point is within this many metres of the ground
-# plane is "in contact". ~1 cm is a reasonable kinematic threshold for this rig;
-# tune per scene via the panel.
-DEFAULT_CONTACT_THRESHOLD_M: float = 0.01
+# plane is "in contact". Tuned against the real ``open-duck-mini.blend`` rig
+# (verified on Blender 5.2.1): across the shipped 60-frame walk the toe bones
+# travel ~29 mm vertically (min/max per foot ≈ 0/29 mm above the lowest planted
+# point), with a median height of ~15 mm. The previous 10 mm band assumed a
+# ~1 cm kinematic step and flagged only ~19% of the cycle as contact per foot —
+# implausibly low for a walking gait, whose stance fraction is ≳50%. A 15 mm
+# band (≈ half the measured toe travel ≈ the median height) yields ~48% per-foot
+# contact duty while still classifying the fully-lifted swing apex (~29 mm) as
+# no-contact. Tune per scene via the panel; also set ``ground_z`` to the scene's
+# actual ground (this rig's toes sit at world Z ≈ -0.147 m, so the default
+# ``ground_z=0`` must be overridden or every frame reads as contact).
+DEFAULT_CONTACT_THRESHOLD_M: float = 0.015
 
 
 def compute_foot_contacts(

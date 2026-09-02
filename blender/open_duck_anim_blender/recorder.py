@@ -37,6 +37,42 @@ except Exception:  # pragma: no cover - exercised only inside Blender
     bpy = None  # type: ignore
 
 
+# --- bpy-free root-orientation maths (unit-tested in tests/) ----------------
+def euler_to_quaternion_xyzw(yaw, pitch, roll):
+    """ZYX (yaw-pitch-roll) Euler → quaternion in scipy ``as_quat`` XYZW order.
+
+    This is the exact emitted convention consumed downstream at ``frame[3:7]``
+    (``R.from_quat`` / ``R.from_matrix(...).as_quat()`` in the reference-motion
+    pipeline — XYZW, *not* the stale ``qw,qx,qy,qz`` comments in that code).
+    """
+    cy, sy = np.cos(yaw * 0.5), np.sin(yaw * 0.5)
+    cp, sp = np.cos(pitch * 0.5), np.sin(pitch * 0.5)
+    cr, sr = np.cos(roll * 0.5), np.sin(roll * 0.5)
+    return np.array(
+        [
+            sr * cp * cy - cr * sp * sy,  # x
+            cr * sp * cy + sr * cp * sy,  # y
+            cr * cp * sy - sr * sp * cy,  # z
+            cr * cp * cy + sr * sp * sy,  # w
+        ]
+    )
+
+
+def root_frame_euler_rpy(rx, ry, rz):
+    """Map the root bone's local Euler ``(rx, ry, rz)`` to blender-frame RPY.
+
+    Reproduces the upstream axis convention exactly: roll is negated, pitch and
+    yaw pass through. Returns ``[roll, pitch, yaw]``.
+    """
+    return [-rx, ry, rz]
+
+
+def root_frame_quat_xyzw(rx, ry, rz):
+    """Root bone local Euler → blender-frame orientation quaternion (XYZW)."""
+    roll_b, pitch_b, yaw_b = root_frame_euler_rpy(rx, ry, rz)
+    return euler_to_quaternion_xyzw(yaw_b, pitch_b, roll_b)
+
+
 class DataRecorder:
     """Deterministic recorder for the Open Duck Mini rig.
 
@@ -77,17 +113,33 @@ class DataRecorder:
         return [-y, x, z]
 
     def euler_to_quaternion(self, yaw, pitch, roll):
-        cy, sy = np.cos(yaw * 0.5), np.sin(yaw * 0.5)
-        cp, sp = np.cos(pitch * 0.5), np.sin(pitch * 0.5)
-        cr, sr = np.cos(roll * 0.5), np.sin(roll * 0.5)
-        return np.array(
-            [
-                sr * cp * cy - cr * sp * sy,  # x
-                cr * sp * cy + sr * cp * sy,  # y
-                cr * cp * sy - sr * sp * cy,  # z
-                cr * cp * cy + sr * sp * sy,  # w
-            ]
-        )
+        return euler_to_quaternion_xyzw(yaw, pitch, roll)
+
+    def _root_local_euler_rpy(self):
+        """Read the ``root`` bone's local rotation as ``(rx, ry, rz)`` Euler,
+        independent of its ``rotation_mode``.
+
+        The rig's ``root`` bone is in QUATERNION mode, where ``rotation_euler``
+        is a stale, always-identity channel — reading it silently exports an
+        identity root orientation and corrupts any motion that turns the body.
+        Branch on the actual mode and convert to the same XYZ Euler components
+        the downstream axis remap expects.
+        """
+        pb = self.pose.bones["root"]
+        mode = pb.rotation_mode
+        if mode == "QUATERNION":
+            e = pb.rotation_quaternion.to_euler("XYZ")
+            return (e.x, e.y, e.z)
+        if mode == "AXIS_ANGLE":
+            import mathutils  # type: ignore
+
+            aa = pb.rotation_axis_angle  # (angle, x, y, z)
+            e = mathutils.Quaternion(aa[1:4], aa[0]).to_euler("XYZ")
+            return (e.x, e.y, e.z)
+        # Any Euler mode: components are per-axis angles (order affects only
+        # composition, which the component-wise remap below already assumes).
+        e = pb.rotation_euler
+        return (e[0], e[1], e[2])
 
     def get_root_position(self):
         x_root_frame, y_root_frame, z_root_frame = self.pose.bones["root"].location
@@ -99,17 +151,10 @@ class DataRecorder:
         )
 
     def get_root_orientation(self, return_quat=True):
-        roll_root_frame, pitch_root_frame, yaw_root_frame = self.pose.bones[
-            "root"
-        ].rotation_euler
-        roll_blender_frame = -roll_root_frame
-        pitch_blender_frame = pitch_root_frame
-        yaw_blender_frame = yaw_root_frame
+        rx, ry, rz = self._root_local_euler_rpy()
         if not return_quat:
-            return [roll_blender_frame, pitch_blender_frame, yaw_blender_frame]
-        return self.euler_to_quaternion(
-            yaw_blender_frame, pitch_blender_frame, roll_blender_frame
-        )
+            return root_frame_euler_rpy(rx, ry, rz)
+        return root_frame_quat_xyzw(rx, ry, rz)
 
     # --- joint reading (D2 + D11 fixed via the transform table) ---------------
     def get_bone_eulers(self) -> Dict[str, Sequence[float]]:
