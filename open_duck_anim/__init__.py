@@ -138,6 +138,20 @@ from .clip import (
     POSTURE_AUTHORING_BOUNDS,
 )
 
+# Reference-motion kinematic-consistency validator (59-float format)
+from .reference_validator import (
+    validate_reference,
+    validate_reference_file,
+    ValidationResult,
+    ReferenceValidationError,
+    Issue,
+    angular_velocity_from_quats,
+    quat_mul,
+    quat_conj,
+    quat_to_rotvec,
+    FRAME_SIZE_59,
+)
+
 __all__ = [
     "__version__",
     # joint_order
@@ -175,4 +189,8 @@ __all__ = [
     "TorsoEnvelope", "DEFAULT_TORSO_ENVELOPE", "DERATED_TORSO_ENVELOPE",
     "posture_to_command_offsets", "POSTURE_COMMAND_CHANNELS",
     "POSTURE_CHANNELS", "NEUTRAL_POSTURE", "POSTURE_AUTHORING_BOUNDS",
+    # reference-motion validator (59-float format)
+    "validate_reference", "validate_reference_file", "ValidationResult",
+    "ReferenceValidationError", "Issue", "angular_velocity_from_quats",
+    "quat_mul", "quat_conj", "quat_to_rotvec", "FRAME_SIZE_59",
 ]
