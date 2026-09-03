@@ -45,6 +45,11 @@ from .joint_order import HW_ORDER_14, HEAD_SLICE_16, INIT_POS_14, LEG_INDICES_16
 from .transform import TRAINING_LOW, TRAINING_HIGH, NOMINAL_HEAD_POSE
 from .envelope import HeadEnvelope, DEFAULT_ENVELOPE
 from .leg_envelope import LegDockEnvelope, DERATED_LEG_ENVELOPE
+from .torso_envelope import (
+    TorsoEnvelope,
+    DEFAULT_TORSO_ENVELOPE,
+    posture_to_command_offsets,
+)
 from .limits import JointRateLimiter, MAX_MOTOR_VELOCITY
 
 # Timing constants (plan §6.6).
@@ -99,6 +104,11 @@ class EngineOutput:
     show: TickShow
     leg_targets: Optional[np.ndarray] = None    # (10,) DOCK_DEMO only, else None
     head_targets: Optional[np.ndarray] = None   # (4,) DOCK_DEMO only, else None
+    # (3,) [torso_height_delta, grav_x, grav_y] added to the standing policy's
+    # torso command (commands[7:10]). STAND mode only (the torso-command standing
+    # policy); None in WALK (deployed policy has no torso command) and DOCK (body
+    # animated via ``leg_targets``). See :mod:`open_duck_anim.torso_envelope`.
+    posture_command_offsets: Optional[np.ndarray] = None
 
 
 def _ramp(x: float) -> float:
@@ -316,6 +326,7 @@ class Engine:
         head_joint_limits: Optional[tuple] = None,
         head_envelope: Optional[HeadEnvelope] = None,
         leg_envelope: Optional[LegDockEnvelope] = None,
+        torso_envelope: Optional[TorsoEnvelope] = None,
     ) -> None:
         self.background = background
         self.max_layers = max_layers
@@ -382,6 +393,20 @@ class Engine:
         self._leg_rate = JointRateLimiter(MAX_MOTOR_VELOCITY)
         self._prev_leg_targets: Optional[np.ndarray] = None
         self._last_leg_t: Optional[float] = None
+        # --- STAND full-body posture path (torso height/orientation command) ---
+        # Sustained postural emotion (sad sag, proud puff, alert tall) is a torso
+        # COMMAND on the standing policy, not an animated joint track. Like the
+        # head and leg paths the torso envelope is OPT-OUT and enforced by
+        # default; it defaults to the ENFORCING (not derated) envelope to match
+        # the head, but note (torso_envelope.py) these limits are UNSWEPT
+        # kinematic placeholders and MUST be swept against the trained standing
+        # checkpoint before hardware. Pass ``TorsoEnvelope.unbounded()`` for pure
+        # compositor-math tests. Enforced only in STAND (below).
+        self.torso_envelope = (
+            torso_envelope if torso_envelope is not None else DEFAULT_TORSO_ENVELOPE
+        )
+        self._prev_posture: Optional[np.ndarray] = None
+        self._last_posture_t: Optional[float] = None
         # Observability (plan §6.5): count of full-body triggers refused because
         # the mode was not DOCK, and a latched flag set whenever an in-flight
         # full-body clip had to be controlled-aborted by a mode transition. Both
@@ -433,6 +458,8 @@ class Engine:
         self._head_fault = False
         self._prev_leg_targets = None
         self._last_leg_t = None
+        self._prev_posture = None
+        self._last_posture_t = None
 
     # --- trigger handling -----------------------------------------------------
     def _owner(self) -> Optional[_ClipState]:
@@ -550,6 +577,15 @@ class Engine:
         comp_legs = None
         if mode == MODE_DOCK:
             comp_legs = _DOCK_LEG_HOLD.copy()
+        # STAND posture accumulator: torso command offsets, blended by BODY weight
+        # exactly like the head, so a mood's sag eases in over T_alpha and eases
+        # back to neutral when a neutral-posture clip preempts it. Starts from the
+        # background clip's (usually neutral) posture. Cheap (sin of 3 scalars per
+        # layer); only clamped + emitted in STAND (below).
+        if self.background is not None:
+            comp_posture = posture_to_command_offsets(self.background.posture)
+        else:
+            comp_posture = np.zeros(3, dtype=np.float64)
         owner = self._owner()
         for st in self._layers:
             wb = st.weight_body(t_now)
@@ -560,6 +596,12 @@ class Engine:
                 comp_head *= (1.0 - wb)
                 np.multiply(ch, wb, out=self._scratch)
                 comp_head += self._scratch
+                # Posture blends with the same body weight. Every clip carries a
+                # posture (neutral for head-only clips), so this correctly eases a
+                # non-neutral mood in AND eases it back out under a neutral clip.
+                cp = posture_to_command_offsets(st.clip.posture)
+                comp_posture *= (1.0 - wb)
+                comp_posture += cp * wb
                 if comp_legs is not None and st.clip.layer_mask == "full_body":
                     cl = st.sample_legs(t_now)
                     comp_legs *= (1.0 - wb)
@@ -634,6 +676,38 @@ class Engine:
                 self._head_fault = True
             self._last_t = t_now
 
+        # STAND full-body posture command (torso height/orientation). Enforced
+        # ONLY in STAND — the torso-command standing policy is the only policy
+        # that consumes a torso command. In WALK the deployed passthrough policy
+        # has no torso command; in DOCK the body is animated via ``leg_targets``.
+        # Outside STAND the slew reference is FROZEN (like the head's in DOCK) so a
+        # WALK/DOCK→STAND transition slews from the true last emitted posture, not
+        # one advanced while the command was inert.
+        posture_command_offsets = None
+        if mode == MODE_STAND:
+            if self._last_posture_t is None or t_now <= self._last_posture_t:
+                dt_p = CTRL_DT
+            else:
+                dt_p = min(t_now - self._last_posture_t, MAX_SLEW_DT)
+            posture_command_offsets, p_fault = self.torso_envelope.clamp(
+                comp_posture,
+                prev_command_torso=self._prev_posture,
+                dt=dt_p,
+                return_fault=True,
+            )
+            if p_fault:
+                self._head_fault = True
+            if np.all(np.isfinite(posture_command_offsets)):
+                self._prev_posture = posture_command_offsets.copy()
+            else:
+                self._prev_posture = None
+                self._head_fault = True
+            self._last_posture_t = t_now
+        else:
+            # Drop the reference so a later STAND re-entry re-seeds from neutral.
+            self._prev_posture = None
+            self._last_posture_t = None
+
         show = TickShow(
             antenna_l=float(np.clip(comp_al, -1.0, 1.0)),
             antenna_r=float(np.clip(comp_ar, -1.0, 1.0)),
@@ -685,4 +759,5 @@ class Engine:
             show=show,
             leg_targets=leg_targets,
             head_targets=head_targets,
+            posture_command_offsets=posture_command_offsets,
         )

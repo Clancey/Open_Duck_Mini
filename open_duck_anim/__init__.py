@@ -122,6 +122,22 @@ from .leg_envelope import (
     LEG_NAMES,
 )
 
+# Torso posture safety envelope (STAND full-body emotion; UNSWEPT placeholder)
+from .torso_envelope import (
+    TorsoEnvelope,
+    DEFAULT_TORSO_ENVELOPE,
+    DERATED_TORSO_ENVELOPE,
+    posture_to_command_offsets,
+    POSTURE_COMMAND_CHANNELS,
+)
+
+# Clip posture channel (STAND full-body emotion)
+from .clip import (
+    POSTURE_CHANNELS,
+    NEUTRAL_POSTURE,
+    POSTURE_AUTHORING_BOUNDS,
+)
+
 __all__ = [
     "__version__",
     # joint_order
@@ -155,4 +171,8 @@ __all__ = [
     "LegDockEnvelope", "DEFAULT_LEG_ENVELOPE", "DERATED_LEG_ENVELOPE",
     "DOCK_LEG_HOLD", "DOCK_LEG_MAX_DEFLECTION", "DOCK_LEG_DERATING",
     "LEG_JNT_LOW", "LEG_JNT_HIGH", "LEG_HW_INDICES", "LEG_NAMES",
+    # torso posture envelope + clip posture channel (STAND full-body emotion)
+    "TorsoEnvelope", "DEFAULT_TORSO_ENVELOPE", "DERATED_TORSO_ENVELOPE",
+    "posture_to_command_offsets", "POSTURE_COMMAND_CHANNELS",
+    "POSTURE_CHANNELS", "NEUTRAL_POSTURE", "POSTURE_AUTHORING_BOUNDS",
 ]

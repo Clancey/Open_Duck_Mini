@@ -198,6 +198,12 @@ def compile_to_dict(
         },
     }
 
+    # Optional sustained full-body posture (torso height/orientation command).
+    # Constant per clip; only emitted by the STAND torso-command policy. Passed
+    # through verbatim from meta when present so a mood can carry a sag/puff/tall.
+    if meta.get("posture") is not None:
+        out["posture"] = _to_py_floats(meta["posture"])
+
     # Run all validations; fail loudly with actionable messages (plan §4.1-C).
     validate_clip_dict(
         out,

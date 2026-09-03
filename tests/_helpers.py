@@ -67,6 +67,7 @@ def make_meta(
     requires_mode: str = "any",
     events: Optional[List[Dict]] = None,
     eyes: Optional[List[int]] = None,
+    posture: Optional[List[float]] = None,
 ) -> Dict:
     meta = {
         "name": name,
@@ -85,6 +86,8 @@ def make_meta(
         meta["events"] = events
     if eyes is not None:
         meta["eyes"] = eyes
+    if posture is not None:
+        meta["posture"] = posture
     return meta
 
 

@@ -45,6 +45,38 @@ DURATION_TOL = 1e-6      # duration_s == frame_count / fps
 CHANNEL_MOTION_TOL = 1e-4  # a "neutral" channel must not vary more than this
 NEUTRAL_POSE_TOL = 0.12    # closeness to nominal hold, if a hold is supplied
 
+# --- Posture channel (sustained full-body emotion via torso commands) ---------
+# A clip may carry a *posture*: a torso height offset (m, relative to the standing
+# nominal) and a torso orientation (pitch/roll, rad). Following Disney BD-X
+# (arXiv:2501.05204 Eq.5), the STANDING policy takes torso height + orientation as
+# COMMANDS, so a sustained postural emotion (sad sag, proud puff, alert tall) is a
+# single continuously-blendable command value on ONE policy — not a per-emotion
+# trained clip. The engine converts this authoring triple into the standing
+# policy's command offsets and blends it with the SAME body-weight / ``T_alpha``
+# machinery as the head, clamped by :class:`open_duck_anim.torso_envelope`.
+#
+# Posture ACTUATES ONLY in STAND mode (the torso-command standing policy). WALK is
+# the deployed passthrough policy which has NO torso command; DOCK animates the
+# whole body via leg joint targets instead. A nonzero posture is therefore only
+# meaningful for ``requires_mode`` in {"stand", "any"} and is rejected otherwise.
+POSTURE_CHANNELS: Tuple[str, str, str] = (
+    "torso_height_delta_m",  # + = taller/puff, - = lower/sag (metres from nominal)
+    "torso_pitch_rad",       # + = lean/sag forward (nose-down torso)
+    "torso_roll_rad",        # + = roll right (kept conservative; narrow base)
+)
+NEUTRAL_POSTURE: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+# Authoring SANITY bounds only — NOT the balance-safety envelope. The engine's
+# :class:`TorsoEnvelope` performs the balance-critical clamp (and its ranges MUST
+# be swept against the trained standing checkpoint before any hardware use). These
+# just reject obviously-wrong authored values early. Derived from the MJCF
+# kinematic reach (torso height ~0.127-0.195 m around a 0.16 m nominal) with head-
+# room for the tighter safety clamp to bind.
+POSTURE_AUTHORING_BOUNDS: Dict[str, Tuple[float, float]] = {
+    "torso_height_delta_m": (-0.05, 0.05),
+    "torso_pitch_rad": (-0.35, 0.35),
+    "torso_roll_rad": (-0.20, 0.20),
+}
+
 
 class ClipValidationError(ValueError):
     """Raised when a ``.duckanim`` clip violates the plan §5 / §6.2 rules."""
@@ -131,6 +163,17 @@ class DuckAnimClip:
     show: ShowOutput
     antenna_calibration: Dict[str, AntennaCalibration]
     version: int = FORMAT_VERSION
+    # Sustained full-body posture (torso_height_delta_m, torso_pitch_rad,
+    # torso_roll_rad). Constant per clip: it is a *held* mood offset, not an
+    # animated joint track. Defaults to neutral (no torso deflection). Only
+    # actuated in STAND mode by the torso-command standing policy; see
+    # :data:`POSTURE_CHANNELS`.
+    posture: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
+
+    @property
+    def has_posture(self) -> bool:
+        """True if this clip carries a non-neutral torso posture (§ full-body)."""
+        return bool(np.any(np.asarray(self.posture) != 0.0))
 
     # --- runtime accessors ----------------------------------------------------
     @property
@@ -211,6 +254,43 @@ def _channel_is_neutral(
     return True, ""
 
 
+def _validate_posture(d: Dict[str, Any], requires_mode: str) -> None:
+    """Validate the optional per-clip ``posture`` triple (full-body emotion).
+
+    Absent or neutral posture is always legal. A NON-neutral posture is a torso
+    command that only actuates in STAND, so it is legal only for
+    ``requires_mode`` in {"stand", "any"} (WALK has no torso command; DOCK moves
+    the whole body via leg targets). Values must be finite and within the
+    authoring sanity bounds (:data:`POSTURE_AUTHORING_BOUNDS`) — the balance-safe
+    clamp is the engine's :class:`TorsoEnvelope`, not this check.
+    """
+    if "posture" not in d or d["posture"] is None:
+        return
+    raw = d["posture"]
+    arr = np.asarray(raw, dtype=np.float64)
+    if arr.shape != (3,):
+        raise ClipValidationError(
+            "posture must be a length-3 [%s] vector, got shape %r"
+            % (", ".join(POSTURE_CHANNELS), arr.shape)
+        )
+    if not np.all(np.isfinite(arr)):
+        raise ClipValidationError("posture contains a non-finite value: %r" % (raw,))
+    for i, ch in enumerate(POSTURE_CHANNELS):
+        lo, hi = POSTURE_AUTHORING_BOUNDS[ch]
+        if not (lo <= arr[i] <= hi):
+            raise ClipValidationError(
+                "posture channel %r = %.4g out of authoring bounds [%.4g, %.4g]"
+                % (ch, arr[i], lo, hi)
+            )
+    if np.any(arr != 0.0) and requires_mode not in ("stand", "any"):
+        raise ClipValidationError(
+            "non-neutral posture requires requires_mode in {'stand','any'} (got "
+            "%r). A torso posture command only actuates on the STAND policy; WALK "
+            "has no torso command and DOCK animates the body via leg targets. "
+            "Re-author as requires_mode='stand', or drop the posture." % requires_mode
+        )
+
+
 def validate_clip_dict(
     d: Dict[str, Any],
     on_channel_violation: str = "error",
@@ -267,6 +347,9 @@ def validate_clip_dict(
         raise ClipValidationError(
             "requires_mode must be one of %r, got %r" % (REQUIRES_MODES, requires_mode)
         )
+
+    # --- posture (optional full-body torso command) ---
+    _validate_posture(d, requires_mode)
 
     # --- blend times ---
     blend_in_s = float(_require(d, "blend_in_s"))
@@ -461,6 +544,11 @@ def clip_from_dict(
         )
         for side in ("left", "right")
     }
+    raw_posture = d.get("posture")
+    if raw_posture is None:
+        posture = np.zeros(3, dtype=np.float64)
+    else:
+        posture = np.ascontiguousarray(np.asarray(raw_posture, dtype=np.float64))
     return DuckAnimClip(
         name=str(d["name"]),
         fps=int(d["fps"]),
@@ -479,6 +567,7 @@ def clip_from_dict(
         show=show,
         antenna_calibration=cal,
         version=int(d.get("version", FORMAT_VERSION)),
+        posture=posture,
     )
 
 
