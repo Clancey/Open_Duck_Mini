@@ -22,22 +22,30 @@ applied in order: (0) finiteness repair, (1) per-channel deflection clamp,
 (2) a combined multi-axis L2 budget, (3) a per-channel slew-rate cap LAST so the
 returned command satisfies all three invariants simultaneously.
 
-.. warning::
+.. note::
 
-   **THESE LIMITS ARE UNSWEPT PLACEHOLDERS — NOT A MEASURED SAFE ENVELOPE.**
+   **HEIGHT is now MEASURED; ORIENTATION is still provisional.**
 
-   Unlike :mod:`open_duck_anim.envelope`, whose numbers were swept against a real
-   trained checkpoint, **no torso-command policy has been trained yet**, so there
-   is NO measured *holdable* range and NO measured topple onset. The defaults
-   below are the conservative **kinematic reach** of the MJCF (how far the duck
-   *could* move its torso if it stayed balanced), NOT the balance-limited range
-   an RL policy can actually hold. Torso posture directly affects balance, so
-   before ANY hardware use these MUST be re-derived by sweeping the trained
-   standing checkpoint with the plan §6.5 methodology used for the head
-   (``experiments/animation/envelope_sweep.py``): a genuinely-fine first-onset
-   outward sweep, ≥5 s holds (head instability proved non-monotonic and
-   time-dependent), across the full command grid. Until then treat this envelope
-   as *sim-only, provisional* and keep :data:`HARDWARE_DERATING` applied.
+   The **height** limits below were swept against a real trained standing
+   checkpoint (:data:`MEASURED_CHECKPOINT`, the Phase-3 torso-posture policy) with
+   the plan §6.5 methodology used for the head: a fine command sweep, ≥5 s holds
+   (instability proved non-monotonic and time-dependent), pushes and observation
+   noise disabled. Result: **across the entire commanded height sweep
+   (0.130–0.190 m about a ~0.159 m measured nominal) the duck NEVER fell** — the
+   binding limit is *tracking saturation*, not topple. Achieved base height floors
+   at ~0.140 m (deepest sag) and ceilings at ~0.177 m (tallest), and tracks the
+   command ~1:1 in between. The shipped ``torso_height_delta`` box is the
+   faithfully-tracked, zero-fall sub-band of that reach.
+
+   The two **orientation** channels (``grav_x`` pitch, ``grav_y`` roll) are NOT
+   yet measured-usable: the v1 checkpoint pinned here *does not track them at all*
+   (achieved projected-gravity stayed ≈0 for every commanded lean, though it also
+   never fell — commanding them is harmless but ineffective). A second policy
+   (v2: 4× orientation weight, tighter error scale, holdable-only ranges) is in
+   training specifically to make the torso lean; the orientation limits below
+   remain the conservative kinematic placeholders pending that sweep. Torso
+   posture directly affects balance, so keep :data:`HARDWARE_DERATING` applied and
+   treat orientation as *sim-only, provisional* until re-swept against v2.
 """
 
 from dataclasses import dataclass, field
@@ -55,6 +63,14 @@ POSTURE_COMMAND_CHANNELS: Tuple[str, str, str] = (
 # Control tick used to derive the per-tick slew step (plan §6.6: ctrl_dt = 0.02).
 CTRL_DT: float = 0.02
 
+# The trained standing checkpoint the HEIGHT limits below were swept against.
+# (Phase-3 torso-posture policy, 300M steps; obs [1,88] -> continuous_actions
+# [1,14]. This is a NEW, SEPARATE policy — it does NOT replace the deployed
+# 101-wide walking passthrough.) Pin the envelope to the checkpoint that produced
+# it, exactly as open_duck_anim.envelope pins the head numbers.
+MEASURED_CHECKPOINT: str = "standing_torso_20260903_011541/2026_09_03_023626_300482560.onnx"
+MEASURED_NOMINAL_HEIGHT: float = 0.159  # m, measured neutral-command base height
+
 # Conservative fraction of a measured failure onset that would be adopted as the
 # safe limit ONCE a sweep exists (see :mod:`open_duck_anim.envelope`). No onset
 # has been measured yet, so the defaults below are NOT `SAFETY_FRACTION * onset`;
@@ -65,18 +81,22 @@ SAFETY_FRACTION: float = 0.5
 # ---------------------------------------------------------------------------
 # Per-channel deflection limits, as (low, high) offsets from neutral standing.
 # ---------------------------------------------------------------------------
-# PROVISIONAL / KINEMATIC — NOT policy-measured (see module warning).
-#
-#   height  : MJCF kinematic reach is ~0.127..0.195 m about a ~0.16 m nominal
-#             (roughly -0.033 / +0.035 m). Shipped TIGHTER than the reach because
-#             the *balance-holdable* range is unknown and is expected to be a
-#             subset of the reach: (-0.020, +0.020) m.
-#   grav_x  : training range is +/-0.20 (~11.5 deg pitch). Shipped tighter until
-#             swept: (-0.12, +0.12).
-#   grav_y  : narrow lateral base -> roll is the riskiest axis. training +/-0.10;
-#             shipped tighter: (-0.06, +0.06).
+#   height  : MEASURED against MEASURED_CHECKPOINT. The full commanded sweep
+#             0.130..0.190 m held ≥5 s with ZERO falls; achieved base height
+#             floored at ~0.140 m and ceilinged at ~0.177 m about a ~0.159 m
+#             measured nominal, tracking ~1:1 in between. Shipped box is the
+#             faithfully-tracked, zero-fall sub-band: (-0.020, +0.016) m
+#             (achieves ~0.140 m sag .. ~0.172 m puff). NOTE the limit here is
+#             tracking saturation, not topple — nothing fell — so this is not
+#             halved by SAFETY_FRACTION; the 2x hardware margin is applied
+#             separately via HARDWARE_DERATING.
+#   grav_x  : PROVISIONAL / not-yet-usable. v1 does NOT track pitch (achieved ≈0
+#             for every command; never fell). Kept at the conservative kinematic
+#             +/-0.12 pending the v2 orientation sweep.
+#   grav_y  : PROVISIONAL / not-yet-usable, as grav_x. Narrow lateral base ->
+#             roll is the riskiest axis; kept tighter at +/-0.06 pending v2.
 DEFLECTION_LIMITS: Dict[str, Tuple[float, float]] = {
-    "torso_height_delta": (-0.020, 0.020),
+    "torso_height_delta": (-0.020, 0.016),
     "torso_grav_x": (-0.12, 0.12),
     "torso_grav_y": (-0.06, 0.06),
 }
@@ -108,12 +128,16 @@ SLEW_LIMIT_VEC: np.ndarray = np.array(
 SLEW_LIMIT_VEC.setflags(write=False)
 
 # Combined multi-axis L2 budget (dimensionless, in per-axis-normalised units).
-# UNCALIBRATED. Without a coupled-axis sweep we cannot measure the resonance
-# budget the head has (0.70); the per-channel box is the real guard for now, so
-# we set a mild coupling penalty of 1.0 (a single channel at its box edge is
-# allowed; all three simultaneously at their edges are scaled back to ||n||=1).
-# Re-measure with an adversarial coupled sweep before trusting multi-axis posture.
-COMBINED_L2_BUDGET: float = 1.0
+# UNCALIBRATED coupling guard. The per-channel box (step 1) is the hard cap; this
+# only scales DOWN when several axes are large at once. It must be >= the worst
+# single-axis normalised edge so that ANY one channel at its own box edge passes
+# unscaled -- the height box is asymmetric (sag -0.020 vs puff +0.016) and the
+# normaliser uses L = min(|low|, high) = 0.016, so the sag edge normalises to
+# 0.020/0.016 = 1.25. Set the budget to 1.25 so the full measured -0.020 m sag
+# (the owner's primary deliverable) is never clipped by coupling; all three axes
+# at their edges (norm ~1.73) are still scaled back. Re-measure with an
+# adversarial coupled sweep before trusting simultaneous multi-axis posture.
+COMBINED_L2_BUDGET: float = 1.25
 
 # Additional derating for first hardware trials (multiplies the deflection box).
 # Held at 0.5 and, unlike the head, NOT relaxable until a first sweep exists at
