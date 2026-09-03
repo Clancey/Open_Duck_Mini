@@ -169,13 +169,19 @@ def test_known_bad_raise_on_error():
     assert "transpos" in str(exc.value).lower()
 
 
-def test_known_bad_degenerate_legs_warning():
-    """standing_wiggle's knees move ~0.0044 rad — a degenerate full-body ref."""
+def test_known_bad_degenerate_legs_error():
+    """standing_wiggle's knees move ~0.0044 rad on a pinned root — for a *standing*
+    full-body motion this is now a hard ERROR (nothing full-body to imitate), not a
+    mere warning: the generator must refuse to write it."""
     res = validate_reference_file(KNOWN_BAD)
-    leg_warns = [w for w in res.warnings if w.field == "joints_pos"]
-    assert leg_warns, "expected a degenerate leg-motion warning"
-    assert "knee" in leg_warns[0].message.lower()
-    assert "0.0044" in leg_warns[0].message
+    leg_errs = [e for e in res.errors if e.field == "joints_pos"]
+    assert leg_errs, "expected a degenerate leg-motion ERROR for a standing motion"
+    assert "knee" in leg_errs[0].message.lower()
+    assert "0.0044" in leg_errs[0].message
+    # and the pinned floating base must also be rejected outright
+    root_errs = [e for e in res.errors if e.field == "root_pos"]
+    assert root_errs, "expected a pinned-root ERROR for a standing full-body motion"
+    assert "translate" in root_errs[0].message.lower()
 
 
 # --------------------------------------------------------------------------- #

@@ -34,12 +34,9 @@ Code lives on the **`episodic` branch of `Clancey/Open_Duck_Playground`** (never
   saturates at ±1; sampled actions diverge, `action_rate` cost climbs, episode
   length erodes, and the robot topples. This is reference-independent: it recurs
   even with a balance-feasible 0.4-amplitude reference.
-- **The shipped reference *does* have a real defect — the user's instinct was right — but it is training-irrelevant.** The team validator (`open_duck_anim/reference_validator.py`) flags `standing_wiggle.json`: `root_quat` was stored in **WXYZ** order while the 59-float format declares scipy **XYZW**, so the recomputed `world_ang_vel` looks **x↔z transposed**, and `joints_vel` used a central- rather than backward-difference convention. **However**, the episodic env's `get_frame` **never reads `root_quat`**, and the `world_ang_vel` *values* training consumes are unchanged to within **0.053 rad/s**; the `lin_vel=0` the user read as "zeroed while moving" is *correct* (the root is exactly static, which the validator confirms). The reference has now been **regenerated to pass the validator (0 errors)**, but that fix does **not** change training behaviour — proven by the 0.4-amplitude run (same `world_ang_vel`, scaled) diverging identically. An earlier version of this doc and `animation_system_plan.md` (Phase 6 / R19) over-corrected in the opposite direction ("the reference is fully consistent"); both framings were imprecise and are now reconciled here.
-- **What episodic actually needs:** a **bounded / tanh-squashed action distribution
-  with explicit std/KL control** (a training-stack change to Open_Duck_Playground's
-  PPO, research-grade), paired with an **amplitude curriculum** (knob already
-  implemented). Not hyperparameter tuning. **Regenerating the reference is necessary
-  housekeeping but NOT sufficient — do not schedule a run on the reference fix alone.**
+- **The shipped reference has TWO independent problems; the user was right about both, and neither was fixable by "repairing velocities."** (1) A real **format defect** — `root_quat` stored WXYZ while the 59-float format declares scipy XYZW, so recomputed `world_ang_vel` reads **x↔z transposed** and `joints_vel` was central- not backward-difference. This is *training-irrelevant* (the env's `get_frame` never reads `root_quat`; the `world_ang_vel` values training consumes shift ≤0.053 rad/s; the 0.4-amplitude run with the same profile diverged identically) but is now **fixed** in the generator (proven: fresh output agrees to `[0,0,0]` per axis). (2) The deeper problem — the reference is a **head animation on a pinned root**: `root_pos` ptp `[0,0,0]`, knees 0.0044 rad, because it was derived from a *docked* clip whose root cannot translate. **There is nothing full-body to imitate**, and this cannot be repaired — the motion must be **re-authored** as a weight-shift (base sways, legs flex, feet planted). My earlier "don't add torso motion, it's balance-safe as-is" was wrong: it conflated destabilising trunk *rotation* (correctly avoided) with balance-*compatible* base *translation* + leg flexion (which a standing wiggle must have). The suspected Blender frame map `[-y,x,z]` is **ruled out** — the dock clip carries no root/velocity channels; the defect was the generator's own quaternion order (`make_standing_wiggle_reference.py:138`).
+- **Durable gate now in place:** the validator treats a *standing* full-body reference with a pinned root or static legs as a **hard error**; the generator refuses to write its own degenerate output; the test suite (17 passing) asserts it fails on the exact shipped file. This is the "validate inputs before GPU" check that would have saved five runs.
+- **What episodic actually needs, in order:** (a) a **re-authored weight-shift reference** (IK-coupled base+legs, not the docked clip) that clears the hardened validator; **and** (b) a **bounded / tanh-squashed action distribution with explicit std/KL control** (a training-stack change to Open_Duck_Playground's PPO), paired with the **amplitude curriculum** (knob implemented). **Do not schedule a run until *both* land** — the reference fix alone, or the PPO fix alone, will fail again.
 
 ---
 
@@ -155,26 +152,72 @@ is the whole story here.
   showed the action-std runaway. So even the fields that *did* change are not what
   stops training.
 
-**Action taken:** the reference has been **regenerated to pass the validator**
-(committed to `Clancey/Open_Duck_Playground@episodic`). This removes a genuine format
-defect and a validator failure — good housekeeping the user rightly asked for — but
-it is **necessary, not sufficient**.
+**Action taken and correction (supersedes "regenerated to pass the validator").**
+A fresh generator run proves the velocity/transposition fix works — derived-from-quat
+and stored `world_ang_vel` now agree to `[0,0,0]` per axis, `lin_vel` matches `d(root_pos)/dt`:
 
-**On Bug 3 ("barely a wiggle") and why the fix is *not* "make it more aggressive."**
-The validator's degeneracy warning is fair: knees/ankles move only 0.0044 rad and
-the visible motion is head-led (`head_yaw`/`head_roll` ≈ 0.13–0.32 rad). But this is
-a **deliberate, physically-forced design**, documented in the generator itself: the
-Open Duck Mini V2 **has no torso actuator**, so any demanded base (trunk) angular
-velocity can only be produced by **tipping the whole robot over**. An earlier, more
-aggressive reference (hip-led rock + large trunk shake, ~1.75 rad/s base rotation)
-did exactly that — the policy learned to *fall* to match the demanded rotation, and
-episode length shrank 47→35 under the Eq. 13 boost. The current reference therefore
-keeps base rotation tiny (peak ≈ 0.39 rad/s, reachable by ankle/hip weight-shifting
-without tipping) and drives the visible "happy wiggle" with the 4-DoF head, which
-does not load-bear. **So the request to author "real torso translation and rotation
-with meaningful hip/knee motion" is counter-indicated on this hardware** — it makes
-the clip *less* trainable, not more. The right lever for expressiveness is more head
-motion, not more torso motion.
+```
+ang_vel derived from quats (XYZW): [0.1475 0.0017 0.051 ]
+ang_vel stored in file:            [0.1475 0.0017 0.051 ]   per-axis diff [0,0,0]
+lin_vel derived/stored: [0,0,0]/[0,0,0]   root_pos ptp: [0,0,0]   knee ptp: 0.0044
+```
+
+But two facts make that fix moot:
+1. **It never reached the training.** The reference on the GPU host (mtime 16:27)
+   *predates* the regeneration (22:56); attempt 5 trained the **old, transposed**
+   file. A git commit is not a host deploy — my mistake, now owned.
+2. **Even the fixed file is the wrong motion.** `root_pos` ptp is `[0,0,0]` and the
+   knees move 0.0044 rad. This is a **head animation on a pinned root** — there is
+   nothing full-body to imitate, whatever the velocity fields say. The user is right,
+   and my earlier defence ("head-led is the balance-safe design, so don't add torso
+   motion") **conflated two different things** and was wrong on the important one:
+
+   - *Aggressive trunk **rotation*** on a robot with no torso actuator **is**
+     destabilising (an earlier reference demanding ~1.75 rad/s base rotation made the
+     policy learn to *fall*, ep length 47→35). That part of the caution stands.
+   - *Base **translation** + real leg flexion* (weight-shift over the support
+     polygon) is **not** destabilising — it is literally what balancing consists of.
+     A genuine standing full-body wiggle *should* sway the base a few cm and flex the
+     hips/knees a few degrees, feet planted. The docked-derived clip has none of this
+     because a docked root cannot translate. **This cannot be repaired by fixing
+     velocities; the motion must be re-authored.**
+
+**Traced: where the transposition came from (not the Blender frame map).** The
+suspected culprit — `blender_frame_to_robot_frame(x,y,z)→[-y,x,z]` in
+`blender/open_duck_anim_blender/recorder.py:113` — is **ruled out**: `dock_wiggle.duckanim`
+carries **only joint frames** (no root pose, quaternion, or velocity channels), so
+nothing about the root velocity passes through that map. The generator *synthesizes*
+`root_quat` from roll/yaw sinusoids and derives `world_ang_vel` itself. The defect was
+the generator's **own quaternion order**: the earlier `_quat_from_rpy` returned
+scalar-first `[w,x,y,z]` and stored it, while the format/validator read scalar-last
+XYZW — reading a WXYZ quaternion as XYZW is exactly the observed x↔z swap (reproduced:
+same file read WXYZ→`[0.051,·,0.1475]` vs XYZW→`[0.1475,·,0.051]`). Fixed at
+`make_standing_wiggle_reference.py:138` (`return np.array([x, y, z, w])`) with
+`world_ang_vel` derived from that same quaternion at `:206`. (The pre-fix code was
+never committed here — it ran on the host — so this is reconstructed empirically, not
+cited from a commit.)
+
+**Durable gate added (the real deliverable).** The validator
+(`open_duck_anim/reference_validator.py`) now treats a *standing* full-body reference
+with a pinned root (`root_pos` ptp < 0.01 m) or static knees/ankles (< 0.02 rad) as a
+**hard error**, not a warning. Consequently the generator now **refuses to write** its
+own degenerate output (exit 1, no file). This is the check that would have caught the
+defect before a single GPU-hour, and its acceptance test (`tests/test_reference_validator.py`,
+17 passing) asserts it **fails on the exact shipped file**.
+
+**Plan for a genuinely new reference (no GPU; authoring + validation only).** Author a
+weight-shift standing wiggle: lateral base sway ≈ ±1–2 cm and a small vertical bob
+(nonzero `world_lin_vel` to imitate); antiphase hip_roll/knee/ankle of a few degrees
+so the CoM tracks the sway with **both feet planted** (`[1,1]`); modest head lead for
+the "happy" read; trunk *rotation* kept small (the no-torso-actuator constraint is
+real). Crucially, the base trajectory and the leg poses must be **kinematically
+coupled** — the legs as posed must actually produce that CoM motion with feet planted
+— which needs an **IK/FK pass against the MuJoCo model**, not two independently
+hand-authored channels (authoring them independently would re-introduce the
+"contradictory targets" class of bug). All fields still derived from the pose
+trajectory and passed through the hardened validator before any training. **This is
+authored data, not a trained result — trackability remains unproven and is gated on
+the PPO fix below.**
 
 ### 2d. The actual root cause — action-distribution runaway
 

@@ -89,6 +89,11 @@ DEFAULT_JOINTS_VEL_ATOL = 5e-3    # rad/s
 # is almost certainly authored for the wrong base (e.g. a docked clip reused as a
 # standing reference). ~0.5 deg.
 DEFAULT_LEG_MOTION_MIN_PTP = 0.02
+# A *standing* full-body motion must translate its floating base (weight shift over
+# the support polygon); a base that never moves means there is nothing full-body to
+# imitate — the clip is a head/hip animation on a pinned root (the exact defect that
+# cost five episodic-policy runs). Require at least this base excursion (m, ptp).
+DEFAULT_STANDING_ROOT_MIN_PTP = 0.01
 
 
 class ReferenceValidationError(ValueError):
@@ -290,6 +295,7 @@ def validate_reference(
     ang_vel_atol: float = DEFAULT_ANG_VEL_ATOL,
     joints_vel_atol: float = DEFAULT_JOINTS_VEL_ATOL,
     leg_motion_min_ptp: float = DEFAULT_LEG_MOTION_MIN_PTP,
+    standing_root_min_ptp: float = DEFAULT_STANDING_ROOT_MIN_PTP,
     raise_on_error: bool = False,
 ) -> ValidationResult:
     """Validate a 59-float reference clip for kinematic self-consistency.
@@ -466,6 +472,7 @@ def validate_reference(
     # knee/ankle excursion specifically (matching the standing_wiggle defect).
     mt = motion_type.lower()
     is_fullbody = any(k in mt for k in ("full", "body", "walk", "wiggle"))
+    is_standing = "stand" in mt
     KNEE_ANKLE_16 = (3, 4, 14, 15)
     ka_ptp = np.ptp(joints_pos[:, list(KNEE_ANKLE_16)], axis=0)
     max_ka_ptp = float(ka_ptp.max())
@@ -473,13 +480,34 @@ def validate_reference(
         names = ", ".join(
             "%s=%.4f" % (JOINT_ORDER_16[j], p) for j, p in zip(KNEE_ANKLE_16, ka_ptp)
         )
-        result.add_warning(
-            "joints_pos",
+        msg = (
             "declared full-body motion '%s' but the knees/ankles barely move "
             "(max %.4f rad ptp; %s). A near-static lower body usually means the "
             "clip was authored for a docked/pinned robot and is degenerate as a "
-            "standing/full-body reference." % (motion_type, max_ka_ptp, names),
+            "standing/full-body reference." % (motion_type, max_ka_ptp, names)
         )
+        # For a *standing* full-body motion this is not merely suspicious: there is
+        # nothing full-body to imitate, so a training run is guaranteed to be a
+        # waste. Reject it outright (the generator refuses to write on !ok).
+        if is_standing:
+            result.add_error("joints_pos", msg)
+        else:
+            result.add_warning("joints_pos", msg)
+
+    # A standing full-body wiggle must actually shift its base; a pinned root means
+    # the imitation target carries no whole-body content (see the five-run defect).
+    if is_standing and is_fullbody:
+        root_ptp = float(np.ptp(root_pos, axis=0).max())
+        if root_ptp < standing_root_min_ptp:
+            result.add_error(
+                "root_pos",
+                "declared standing full-body motion '%s' but the floating base "
+                "never translates (root_pos ptp=%.4f m < %.4f m). A standing "
+                "full-body wiggle must shift weight over the support polygon; a "
+                "pinned root means the clip is a head/hip animation with nothing "
+                "full-body to imitate — do not train it."
+                % (motion_type, root_ptp, standing_root_min_ptp),
+            )
 
     if raise_on_error:
         result.raise_if_error()
