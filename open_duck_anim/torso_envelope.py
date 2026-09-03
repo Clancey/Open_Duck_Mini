@@ -38,14 +38,19 @@ returned command satisfies all three invariants simultaneously.
    faithfully-tracked, zero-fall sub-band of that reach.
 
    The two **orientation** channels (``grav_x`` pitch, ``grav_y`` roll) are NOT
-   yet measured-usable: the v1 checkpoint pinned here *does not track them at all*
-   (achieved projected-gravity stayed ≈0 for every commanded lean, though it also
-   never fell — commanding them is harmless but ineffective). A second policy
-   (v2: 4× orientation weight, tighter error scale, holdable-only ranges) is in
-   training specifically to make the torso lean; the orientation limits below
-   remain the conservative kinematic placeholders pending that sweep. Torso
-   posture directly affects balance, so keep :data:`HARDWARE_DERATING` applied and
-   treat orientation as *sim-only, provisional* until re-swept against v2.
+   usable and, on current evidence, **not achievable on this hardware**. TWO
+   independently-trained standing policies keep the torso upright regardless of
+   the commanded lean: the v1 checkpoint pinned here (orientation weight -1.0) and
+   a second run v2 with **4x the orientation weight, a tighter error scale and
+   holdable-only ranges** BOTH tracked achieved projected-gravity ≈0 for every
+   commanded pitch/roll (v2 additionally regressed the height sag, so v1 is the
+   shipped policy). The duck's small feet and head-heavy mass mean a *sustained
+   static* torso lean is not balance-holdable, so the policy correctly refuses it.
+   The orientation limits below are therefore kept only as an inert conservative
+   box; callers should command ``grav_x = grav_y = 0`` and express "hunch"/"droop"
+   via the HEAD channels instead (see the report). Re-open only if a future policy
+   (e.g. a dynamic/transient lean rather than a static hold) demonstrates tracking
+   in a sweep. Keep :data:`HARDWARE_DERATING` applied.
 """
 
 from dataclasses import dataclass, field
@@ -90,11 +95,11 @@ SAFETY_FRACTION: float = 0.5
 #             tracking saturation, not topple — nothing fell — so this is not
 #             halved by SAFETY_FRACTION; the 2x hardware margin is applied
 #             separately via HARDWARE_DERATING.
-#   grav_x  : PROVISIONAL / not-yet-usable. v1 does NOT track pitch (achieved ≈0
-#             for every command; never fell). Kept at the conservative kinematic
-#             +/-0.12 pending the v2 orientation sweep.
-#   grav_y  : PROVISIONAL / not-yet-usable, as grav_x. Narrow lateral base ->
-#             roll is the riskiest axis; kept tighter at +/-0.06 pending v2.
+#   grav_x  : NOT usable / not achievable. Two policies (v1 weight -1.0, v2 weight
+#             -4.0) both refuse to lean (achieved pitch ≈0 for every command;
+#             never fell). Kept as an inert conservative box (+/-0.12); command 0.
+#   grav_y  : NOT usable / not achievable, as grav_x. Narrow lateral base -> roll
+#             is the riskiest axis; kept tighter at +/-0.06. Command 0.
 DEFLECTION_LIMITS: Dict[str, Tuple[float, float]] = {
     "torso_height_delta": (-0.020, 0.016),
     "torso_grav_x": (-0.12, 0.12),
