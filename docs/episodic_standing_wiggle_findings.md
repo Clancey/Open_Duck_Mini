@@ -34,14 +34,12 @@ Code lives on the **`episodic` branch of `Clancey/Open_Duck_Playground`** (never
   saturates at ±1; sampled actions diverge, `action_rate` cost climbs, episode
   length erodes, and the robot topples. This is reference-independent: it recurs
   even with a balance-feasible 0.4-amplitude reference.
-- **An earlier root-cause in `animation_system_plan.md` (Phase 6 / R19) blamed a
-  "kinematically self-contradictory reference." Direct recomputation shows that is
-  wrong for the shipped `standing_wiggle.json`** — its velocity fields are the
-  correct derivatives of its own pose trajectory. That section has been corrected.
+- **The shipped reference *does* have a real defect — the user's instinct was right — but it is training-irrelevant.** The team validator (`open_duck_anim/reference_validator.py`) flags `standing_wiggle.json`: `root_quat` was stored in **WXYZ** order while the 59-float format declares scipy **XYZW**, so the recomputed `world_ang_vel` looks **x↔z transposed**, and `joints_vel` used a central- rather than backward-difference convention. **However**, the episodic env's `get_frame` **never reads `root_quat`**, and the `world_ang_vel` *values* training consumes are unchanged to within **0.053 rad/s**; the `lin_vel=0` the user read as "zeroed while moving" is *correct* (the root is exactly static, which the validator confirms). The reference has now been **regenerated to pass the validator (0 errors)**, but that fix does **not** change training behaviour — proven by the 0.4-amplitude run (same `world_ang_vel`, scaled) diverging identically. An earlier version of this doc and `animation_system_plan.md` (Phase 6 / R19) over-corrected in the opposite direction ("the reference is fully consistent"); both framings were imprecise and are now reconciled here.
 - **What episodic actually needs:** a **bounded / tanh-squashed action distribution
   with explicit std/KL control** (a training-stack change to Open_Duck_Playground's
   PPO, research-grade), paired with an **amplitude curriculum** (knob already
-  implemented). Not hyperparameter tuning.
+  implemented). Not hyperparameter tuning. **Regenerating the reference is necessary
+  housekeeping but NOT sufficient — do not schedule a run on the reference fix alone.**
 
 ---
 
@@ -126,37 +124,57 @@ action distribution instead.
 > current. Always confirm a **live container + newest checkpoint dir** before
 > trusting a cited `STEP` line.
 
-### 2c. Is the reference motion fit for purpose? — YES on consistency; modest in amplitude
+### 2c. Is the reference motion fit for purpose? — one real format defect (now fixed), but not the training blocker
 
 The reference `standing_wiggle.json` (150 frames × 59 floats, 50 fps, 3.0 s) was
-recomputed against its own pose trajectory. The convention-free anchor is decisive:
+checked two ways: a hand recomputation **and** the team's own
+`open_duck_anim.reference_validator`. They disagreed at first, and reconciling them
+is the whole story here.
 
-| field | check | result |
+**What the validator flags on the shipped file (2 errors, 2 warnings):**
+
+| field | validator verdict | reconciliation |
 |---|---|---|
-| **joints_vel** (`35:51`) | vs finite-difference of `joints_pos` (`7:23`) | **corr 1.000, max abs err 0.000** — exact |
-| **lin_vel** (`29:32`) | stored vs `d(root_pos)/dt` | both **exactly zero** — the root genuinely does not translate, so `lin_vel = 0` is *correct*, not a bug |
-| **ang_vel** (`32:35`) | stored vs world-frame `2·q̇·q*` from `root_quat` | **corr 1.000 on x and z** (0.375 / 0.126), y ≈ 0 — no transposition |
+| **`world_ang_vel`** (`32:35`) | **ERROR** — x↔z transposed; "classic symptom of a `root_quat` written in WXYZ order while the format is XYZW" | **Real defect.** The shipped `root_quat` is WXYZ (scalar-first, `w≈1` in slot 0); the format declares scipy **XYZW**. Read as XYZW, the re-derived `ang_vel` swaps x/z. A hand check that read the quaternion as WXYZ instead saw corr 1.000 and *missed* it — that earlier "reference is consistent" conclusion was wrong. **The user's Bug 1 instinct was correct.** |
+| **`joints_vel`** (`35:51`) | **ERROR** — disagrees with `d(joints_pos)/dt` (max 1.75 rad/s at the head_pitch peak) | The stored series is a valid **central** difference; the validator enforces **backward** difference. A convention mismatch, not fabricated data — but it should match the canonical convention. |
+| **`world_lin_vel`** (`29:32`) | WARNING — "identically zero … root_pos is static. Consistent." | **Bug 2 refuted.** The root is *exactly* constant `[0,0,0.15]`; the validator agrees `lin_vel=0` is correct. The "non-zero position" the user saw is the constant standing height, not motion. |
+| **`joints_pos`** (`7:23`) | WARNING — "knees/ankles barely move (0.0044 rad) … degenerate as a standing reference" | **Bug 3 valid** — see the verdict below. |
 
-So the reference **is** kinematically self-consistent. It is a **modest,
-joint-driven wiggle** (largest motion `head_roll` ≈ 0.32 rad; torso does not
-translate; contacts genuinely `[1,1]` throughout, deliberately asserted, not the
-old hardcoded default). That is a legitimate authoring choice for a standing wiggle
-— the imitation target has real, imitable content, not noise.
+**Why the two real errors are nonetheless training-irrelevant:**
 
-> **This corrects an earlier root-cause.** `animation_system_plan.md` (Phase 6 / R19)
-> previously blamed "angular-velocity x/z axes transposed" and "linear velocity
-> zeroed while the root moves." Neither holds for the shipped file: `joints_vel`
-> matches exactly (a frame-convention-free check), the root does **not** move (so
-> `lin_vel=0` is right), and `ang_vel` matches a **world-frame** derivation at
-> corr 1.000. The earlier "transposed" finding came from deriving angular velocity
-> in a **different frame/quaternion-order convention** than the one the file uses —
-> a derivation artifact, not a file defect. One real open item remains: **nail down
-> whether the env compares this world-frame `ang_vel` against a body-frame gyro**
-> (benign while near-upright, but worth reconciling before the next run).
+- The episodic env's `EpisodicReferenceMotion.get_frame` exposes only
+  `[joints_pos, joints_vel, foot_contacts, world_lin_vel, world_ang_vel]`. **It never
+  reads `root_quat`.** The quaternion is used only *inside the generator* to derive
+  `world_ang_vel`, so its storage order cannot affect the reward.
+- Regenerating with the current (XYZW + backward-difference) generator makes the
+  validator pass (**0 errors**) while changing the fields training actually consumes
+  by essentially nothing: `joints_pos`, `world_lin_vel`, `foot_contacts` **identical**;
+  `world_ang_vel` **≤ 0.053 rad/s** different (same tiny shake, exact-vs-small-angle
+  derivation); only `joints_vel` shifts by the central→backward convention.
+- The **0.4-amplitude experiment** used the same `world_ang_vel` (scaled) and still
+  showed the action-std runaway. So even the fields that *did* change are not what
+  stops training.
 
-**Verdict:** the reference is fit for purpose on the dimension that was blamed. Its
-only limitation is expressiveness (joint-led, no torso translation), which the
-amplitude experiment (§4) shows is *not* what is stopping training.
+**Action taken:** the reference has been **regenerated to pass the validator**
+(committed to `Clancey/Open_Duck_Playground@episodic`). This removes a genuine format
+defect and a validator failure — good housekeeping the user rightly asked for — but
+it is **necessary, not sufficient**.
+
+**On Bug 3 ("barely a wiggle") and why the fix is *not* "make it more aggressive."**
+The validator's degeneracy warning is fair: knees/ankles move only 0.0044 rad and
+the visible motion is head-led (`head_yaw`/`head_roll` ≈ 0.13–0.32 rad). But this is
+a **deliberate, physically-forced design**, documented in the generator itself: the
+Open Duck Mini V2 **has no torso actuator**, so any demanded base (trunk) angular
+velocity can only be produced by **tipping the whole robot over**. An earlier, more
+aggressive reference (hip-led rock + large trunk shake, ~1.75 rad/s base rotation)
+did exactly that — the policy learned to *fall* to match the demanded rotation, and
+episode length shrank 47→35 under the Eq. 13 boost. The current reference therefore
+keeps base rotation tiny (peak ≈ 0.39 rad/s, reachable by ankle/hip weight-shifting
+without tipping) and drives the visible "happy wiggle" with the 4-DoF head, which
+does not load-bear. **So the request to author "real torso translation and rotation
+with meaningful hip/knee motion" is counter-indicated on this hardware** — it makes
+the clip *less* trainable, not more. The right lever for expressiveness is more head
+motion, not more torso motion.
 
 ### 2d. The actual root cause — action-distribution runaway
 
