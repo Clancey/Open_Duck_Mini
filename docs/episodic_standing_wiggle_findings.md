@@ -9,9 +9,15 @@ balancing biped. It is a **preview-quality proof-of-pipeline** effort (~300M ste
 ≈ 1.2 h on the RTX 3090), not a show-grade clip.
 
 The code fixes are correct per the paper and are **committed regardless of the
-training outcome** (they are prerequisites for *any* future episodic run). Four
-training attempts all failed the same way. This document records precisely why,
-so the next person does not repeat it.
+training outcome** (they are prerequisites for *any* future episodic run). **Six
+training attempts all failed the same way**, and the fault was in the **input data**
+the whole time: the reference clip was authored from a *docked* motion, so its root
+never translates and its legs barely move — there was nothing full-body to imitate —
+**and** its `root_quat` was written in the wrong component order, which put the robot
+upside-down. Neither was caught by four rounds of numeric reward/phase/termination
+debugging; both became obvious the moment someone (a) ran a kinematic validator over
+the file and (b) **rendered the clip in MuJoCo** (it shows feet-in-air, head-in-ground
+collapse). This document records precisely why, so the next person does not repeat it.
 
 Code lives on the **`episodic` branch of `Clancey/Open_Duck_Playground`** (never
 `apirrone/*`). Local clone used this session:
@@ -34,7 +40,7 @@ Code lives on the **`episodic` branch of `Clancey/Open_Duck_Playground`** (never
   saturates at ±1; sampled actions diverge, `action_rate` cost climbs, episode
   length erodes, and the robot topples. This is reference-independent: it recurs
   even with a balance-feasible 0.4-amplitude reference.
-- **The shipped reference has TWO independent problems; the user was right about both, and neither was fixable by "repairing velocities."** (1) A real **format defect** — `root_quat` stored WXYZ while the 59-float format declares scipy XYZW, so recomputed `world_ang_vel` reads **x↔z transposed** and `joints_vel` was central- not backward-difference. This is *training-irrelevant* (the env's `get_frame` never reads `root_quat`; the `world_ang_vel` values training consumes shift ≤0.053 rad/s; the 0.4-amplitude run with the same profile diverged identically) but is now **fixed** in the generator (proven: fresh output agrees to `[0,0,0]` per axis). (2) The deeper problem — the reference is a **head animation on a pinned root**: `root_pos` ptp `[0,0,0]`, knees 0.0044 rad, because it was derived from a *docked* clip whose root cannot translate. **There is nothing full-body to imitate**, and this cannot be repaired — the motion must be **re-authored** as a weight-shift (base sways, legs flex, feet planted). My earlier "don't add torso motion, it's balance-safe as-is" was wrong: it conflated destabilising trunk *rotation* (correctly avoided) with balance-*compatible* base *translation* + leg flexion (which a standing wiggle must have). The suspected Blender frame map `[-y,x,z]` is **ruled out** — the dock clip carries no root/velocity channels; the defect was the generator's own quaternion order (`make_standing_wiggle_reference.py:138`).
+- **The shipped reference has TWO independent problems; the user was right about both, and neither was fixable by "repairing velocities."** (1) A real **format defect** — `root_quat` stored WXYZ while the 59-float format declares scipy XYZW. Read as XYZW this is a 180° flip about x, which is exactly why the clip **renders upside-down in MuJoCo** (feet up, head in ground) — the render is where the defect finally became *visible*. It also makes recomputed `world_ang_vel` read **x↔z transposed** and `joints_vel` was central- not backward-difference. This is nonetheless *training-irrelevant*: the episodic env consumes the reference `root_quat` **nowhere** — `get_frame` exposes only joints/vel/contacts/world-lin-ang-vel (not `root_quat`), and `reset` initialises base orientation from the **model home keyframe**, not the reference file (verified at `episodic.py:280-285`). The `world_ang_vel` *values* training does consume shift ≤0.053 rad/s when fixed, and the 0.4-amplitude run with the same profile diverged identically. It is now **fixed** in the generator (proven: fresh output agrees to `[0,0,0]` per axis). (2) The deeper problem — the reference is a **head animation on a pinned root**: `root_pos` ptp `[0,0,0]`, knees 0.0044 rad, because it was derived from a *docked* clip whose root cannot translate. **There is nothing full-body to imitate**, and this cannot be repaired — the motion must be **re-authored** as a weight-shift (base sways, legs flex, feet planted). My earlier "don't add torso motion, it's balance-safe as-is" was wrong: it conflated destabilising trunk *rotation* (correctly avoided) with balance-*compatible* base *translation* + leg flexion (which a standing wiggle must have). The suspected Blender frame map `[-y,x,z]` is **ruled out** — the dock clip carries no root/velocity channels; the defect was the generator's own quaternion order (`make_standing_wiggle_reference.py:138`).
 - **Durable gate now in place:** the validator treats a *standing* full-body reference with a pinned root or static legs as a **hard error**; the generator refuses to write its own degenerate output; the test suite (17 passing) asserts it fails on the exact shipped file. This is the "validate inputs before GPU" check that would have saved five runs.
 - **What episodic actually needs, in order:** (a) a **re-authored weight-shift reference** (IK-coupled base+legs, not the docked clip) that clears the hardened validator; **and** (b) a **bounded / tanh-squashed action distribution with explicit std/KL control** (a training-stack change to Open_Duck_Playground's PPO), paired with the **amplitude curriculum** (knob implemented). **Do not schedule a run until *both* land** — the reference fix alone, or the PPO fix alone, will fail again.
 
@@ -121,7 +127,16 @@ action distribution instead.
 > current. Always confirm a **live container + newest checkpoint dir** before
 > trusting a cited `STEP` line.
 
-### 2c. Is the reference motion fit for purpose? — one real format defect (now fixed), but not the training blocker
+### 2c. Is the reference motion fit for purpose? — NO, on two counts (visually confirmed)
+
+**Visual confirmation (attempt 6).** Rendering every clip in MuJoCo settled the
+question a numeric check could not: `standing_wiggle` renders **collapsed and
+inverted — feet in the air, head buried in the ground.** A companion
+`standing_wiggle_fixed` (correct quaternion order) renders **upright**. Both are in
+`~/.copilot/session-state/9d7d4839-.../files/renders/mujoco/` (`.mp4`) and
+`renders/blender/frames/` (`.png`). **Lesson, now enforced in code: render a motion
+before training on it.** Four attempts of reward/phase/termination debugging never
+surfaced what one render made obvious.
 
 The reference `standing_wiggle.json` (150 frames × 59 floats, 50 fps, 3.0 s) was
 checked two ways: a hand recomputation **and** the team's own
@@ -218,6 +233,15 @@ hand-authored channels (authoring them independently would re-introduce the
 trajectory and passed through the hardened validator before any training. **This is
 authored data, not a trained result — trackability remains unproven and is gated on
 the PPO fix below.**
+
+**Is `standing_wiggle_fixed` (from the render work) a viable starting point? No.**
+It corrects the quaternion order (XYZW, `root_quat[0]=[0,0,0,1]`, near-1 in the
+scalar-last slot) so it renders **upright** — that fixes the *orientation* bug only.
+But it is the **same degenerate motion**: `root_pos` ptp `[0,0,0]`, knees 0.0044 rad,
+so it **fails the hardened validator** (2 errors: pinned root + static legs). It is
+useful for visual verification and as a *pose seed* for the head/hip channels, but a
+trainable reference still requires the weight-shift re-authoring above. **Do not treat
+"fixed" as "trainable."**
 
 ### 2d. The actual root cause — action-distribution runaway
 
@@ -322,6 +346,23 @@ buys far more of the same once training is stable.
 ---
 
 ## 5. Sim/hardware status
+
+**What a future episodic attempt needs — hard checklist (all must be true before any `docker run`):**
+1. **A properly authored standing reference that PASSES `reference_validator`** — i.e.
+   real base translation (weight shift) and real leg flexion, feet planted `[1,1]`,
+   XYZW quaternions, velocities derived from poses. Neither `standing_wiggle.json` nor
+   `standing_wiggle_fixed.json` qualifies (both fail the hardened validator). Must be
+   **rendered in MuJoCo and eyeballed upright** before use.
+2. **A working ONNX exporter** — done (`export_onnx.py:160-165`); re-confirm it emits a
+   valid `obs[1,142]→[1,14]` model from a saved checkpoint on the first run.
+3. **Confirmation the phase/termination fixes behave as intended at runtime** — the
+   unit tests pass (5/5), but confirm on a live rollout that φ climbs 0→1 monotonically,
+   φ=1 terminates exactly once, and the head/torso-contact + self-collision terminations
+   do **not** fire spuriously (log the termination-reason histogram for the first 1M
+   steps).
+4. **The PPO action-distribution runaway fixed** — bounded/tanh-squashed policy head +
+   std/KL control, paired with the amplitude curriculum. Without this, items 1–3 still
+   produce a divergent run.
 
 **Sim evaluation only. No hardware.** No policy reached a recognisable upright
 wiggle, so there is nothing worth evaluating on the robot, and a standing full-body
