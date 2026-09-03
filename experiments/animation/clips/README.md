@@ -31,13 +31,13 @@ emotional one-shot beats · **CS** scared/fear beats · **D** walk-compatible ·
 | `mood_scared` | AM | 10.0s | wrap | stand | 0 | parametric | **Scared/frightened mood**: held small and withdrawn, tense frozen stillness broken by quick darting checks, wide eyes with blinking suppressed (the sustained fear mode, re-armed each loop). Set on a persistent threat / an ongoing scary situation (use `calm_down` to exit it). |
 | `curious_tilt` | B | 2.6s | once | any | 10 | blender | Inquisitive head-roll tilt held briefly, with a blink. Trigger on "notices something". |
 | `look_toward` | B | 2.2s | once | any | 10 | blender | Directed look toward a point of interest, held, released. Trigger to point attention. |
-| `double_take` | B | 2.4s | once | stand | 12 | blender | Glance away then a quick snap-back double-take. Stand-only (snappy). Trigger for a surprise it re-checks. |
+| `double_take` | B | 2.4s | once | any | 12 | blender | Glance away then a quick snap-back double-take. Walk-validated (tracks cleanly in motion). Trigger for a surprise it re-checks. |
 | `perk_up` | B | 1.8s | once | stand | 15 | blender | Sudden alert perk-up: head lifts, antennas raise, brief scan. Trigger on "attention caught". |
 | `scan_curious` | B | 4.0s | once | any | 10 | blender | Deliberate slow survey scan side-to-side and back. Trigger to "look for" something. |
 | `nod_yes` | C | 2.2s | once | any | 20 | blender | **Emphatic "yes"**: anticipation lift + a sharp chin-down beat, 3 nods decaying to a settle. Built from `head_pitch` (~4× headroom), not `neck_pitch`. Legible across a room. Trigger on yes/acknowledge/confirm. |
 | `nod_yes_soft` | C | 1.6s | once | any | 13 | blender | **Soft polite nod**: a single gentle dip. "Noted", not "YES". A quieter answer than `nod_yes`. Trigger on a low-key acknowledgement. |
-| `shake_no` | C | 2.5s | once | stand | 20 | blender | **Decisive "no"**: a wind-up + firm alternating `head_yaw` swings (±0.42) that decay and settle dead-centre. Stand-only (yaw reads big). Trigger on no/refuse/reject. |
-| `shake_no_reluctant` | C | 2.8s | once | stand | 13 | blender | **Reluctant "no"**: a slower, smaller shake with the chin sinking in aversion + a slight tilt. A hesitant "...no", a different message from the firm refusal. Trigger on an unwilling decline. |
+| `shake_no` | C | 2.5s | once | any | 20 | blender | **Decisive "no"**: a wind-up + firm alternating `head_yaw` swings (±0.42) that decay and settle dead-centre. Walk-validated (head-follow corr 0.90 in motion) — the duck can say **no** while walking, matching `nod_yes`. Trigger on no/refuse/reject. |
+| `shake_no_reluctant` | C | 2.8s | once | any | 13 | blender | **Reluctant "no"**: a slower, smaller shake with the chin sinking in aversion + a slight tilt. A hesitant "...no", a different message from the firm refusal. Walk-validated. Trigger on an unwilling decline. |
 | `happy_bounce` | C | 2.0s | once | stand | 18 | blender | Delighted bob with a bright antenna flick (event). Trigger on success/reward. |
 | `sad_droop` | C | 3.2s | once | stand | 16 | blender | Dejected droop: head sinks, antennas fold back, slow settle with a slow blink. Trigger on failure/idle-too-long. |
 | `startle` | C | 1.6s | once | stand | 30 | blender | Startled recoil then a wary settle. **Highest priority** — preempts everything. Trigger on a sudden event. |
@@ -46,8 +46,8 @@ emotional one-shot beats · **CS** scared/fear beats · **D** walk-compatible ·
 | `confused_puzzled` | CE | 3.0s | once | any | 12 | blender | Confused/puzzled: the quizzical **double** head-tilt (roll one way then the other) + asymmetric antennas (one up, one down) + slow blink. Trigger on an unexpected / ambiguous input. |
 | `proud_pleased` | CE | 2.6s | once | stand | 18 | blender | Proud/pleased: a dignified slow chest-puff — chin up, antennas raised and held, slow content blink. Trigger on completing something well. |
 | `timid_shy` | CE | 3.0s | once | stand | 16 | blender | Timid/shy: shrink and turn away with a tilt, antennas fold, then a small shy peek back. Trigger on a stranger / being told off. |
-| `disappointed` | CE | 3.0s | once | stand | 16 | blender | Disappointed: a small hopeful lift, then a slow let-down sink with a sigh and a turn-away. The anticipation beat separates it from `sad_droop`. Trigger on a near-miss / a broken promise. |
-| `suspicious_wary` | CE | 3.4s | once | stand | 14 | blender | Suspicious/wary: a held cocked tilt + a slight lean-in + a slow narrow scan + wary half-back antennas. Trigger on something it doesn't trust. |
+| `disappointed` | CE | 3.0s | once | any | 16 | blender | Disappointed: a small hopeful lift, then a slow let-down sink with a sigh and a turn-away. The anticipation beat separates it from `sad_droop`. Walk-validated (the slow sink reads in motion). Trigger on a near-miss / a broken promise. |
+| `suspicious_wary` | CE | 3.4s | once | any | 14 | blender | Suspicious/wary: a held cocked tilt + a slight lean-in + a slow narrow scan + wary half-back antennas. Walk-validated (the held tilt + slow scan track in motion). Trigger on something it doesn't trust. |
 | `sleepy_yawn` | CE | 3.6s | once | stand | 17 | blender | Sleepy yawn: a big slow back-and-up stretch, a long eye-close (the yawn), antennas stretch then flop, drowsy settle. Trigger on going idle / low battery. |
 | `affectionate` | CE | 2.8s | once | any | 14 | blender | Affectionate: a warm tilt-lean nuzzle with a soft bob and a slow content blink. Trigger on being greeted / petted / a familiar face. |
 | `flustered` | CE | 2.2s | once | stand | 20 | blender | Flustered/embarrassed: a wavering look-away + tuck, with the rapid flutter in the **antennas + a double blink** (not the head — see below). Trigger on being caught out / an error it "notices". |
@@ -55,10 +55,14 @@ emotional one-shot beats · **CS** scared/fear beats · **D** walk-compatible ·
 | `greeting` | CE | 2.4s | once | stand | 18 | blender | Greeting: a friendly "hello" — a warm double bob with a tilt + a bright antenna raise + a happy double blink. Trigger on a person appearing. |
 | `flinch` | CS | 2.4s | once | stand | 26 | blender | Flinch: a fast aversive recoil (head snaps back and averts, ears pin, eyes wide) then a **slow tentative return**. The wary recovery is what separates it from `startle`. Trigger on a near-miss / a sudden looming thing. |
 | `cower` | CS | 3.0s | once | stand | 25 | blender | Cower: shrink small — head tucked and turned away, ears pinned back and held, eyes wide, a tiny tense micro-shift. A **sustained** fear pose. Trigger on a persistent threat / being loomed over. |
-| `nervous_lookaround` | CS | 3.2s | once | stand | 23 | blender | Nervous look-around: tense quick darting threat-checks over a withdrawn wary carriage, ears half-back, eyes wide. Trigger on "did I hear something?" / feeling unsafe. |
+| `nervous_lookaround` | CS | 3.2s | once | any | 23 | blender | Nervous look-around: tense quick darting threat-checks over a withdrawn wary carriage, ears half-back, eyes wide. Walk-validated (the darting checks clear the walk floor and track); the one fear-family beat promoted to walking — an *unsettled* walk reads, where a static cower would not. Trigger on "did I hear something?" / feeling unsafe. |
 | `calm_down` | CS | 3.4s | once | stand | 19 | blender | Calm down (**recovery**): release from fear to neutral — un-tuck, face forward, ears un-pin and relax, a flurry of relieved blinks. Trigger to **exit** fear so the emotion never looks stuck; also bridges `mood_scared` → a neutral/content mood. |
 | `walk_look_around` | D | 7.0s | wrap | walk | 5 | parametric | Gentle gaze wander to overlay **while walking**. Small, legible, seamless loop. |
 | `walk_alert` | D | 2.0s | once | walk | 15 | blender | Contained "something caught my eye" alert usable mid-stride. |
+| `walk_excited` | D | 2.2s | once | walk | 16 | blender | Delight usable mid-stride: bright chin-up `head_pitch` bobs + a finishing tilt + antenna flicks. The reduced-amplitude walking cousin of `excited` (whose fast yaw wiggle does not track over a gait). Head-follow corr 0.83 in motion. |
+| `walk_greeting` | D | 2.4s | once | walk | 16 | blender | Friendly "hello" usable mid-stride: warm `head_pitch` nods leading, a slight turn-toward, a tilt and a bright antenna raise. The walking variant of `greeting` (whose bob sits below the walk floor). Head-follow corr 0.88 in motion. |
+| `walk_mood_sad` | D | 9.5s | wrap | walk | 5 | parametric | **Sad mood to CARRY while walking**: a sunk drooped carriage + a persistent roll-lean + a slow heavy blink. The mood lives in the posture (which rides through the gait), not in any scan. The walking counterpart to `mood_sad`. |
+| `walk_mood_alert` | D | 7.5s | wrap | walk | 5 | parametric | **Alert mood to CARRY while walking**: an upright lifted attentive carriage with small sub-floor gaze checks and a rare wide blink. A "sad walk vs alert walk" contrast with `walk_mood_sad`. The walking counterpart to `mood_alert`. |
 | `dock_wiggle` | E | 3.0s | once | **dock** | 25 | dock | **Happy full-body wiggle — dock only.** Hips lead a decaying side-to-side wag, body rocks, head + antennas trail, eyes bright. The **only** clip that moves the legs. Plays **exclusively** in `DOCK_DEMO`; rejected everywhere else at compile *and* runtime. **Deliberately triggered only — never in the idle service.** |
 
 `idle_alive.duckanim` (the original reference clip, 4.0s wrap, `any`, prio 0)
@@ -77,7 +81,11 @@ The duck can now **be** in a mood and **do** emotional beats, not just react.
   docked, not walking): a mood is a *resting* state, and the walking gait swamps
   its subtle motion (the phase-4 head-follow check confirmed the subtlest moods
   do not read over a gait), so while walking the neutral idles + `walk_look_around`
-  take over. Antennas are held flat at rest in every mood loop (owner decision,
+  take over. **Two moods are re-authored to carry through a gait**, though —
+  `walk_mood_sad` and `walk_mood_alert` (category D) rebuild the strongest
+  contrast, a sad walk vs an alert walk, as *carriage* (chin + roll bias) that
+  rides through the gait rather than sharp scans the gait would wash out.
+  Antennas are held flat at rest in every mood loop (owner decision,
   enforced by the guard test); the blink cadence carries the eye expression.
   Set the mood from application state; a triggered reaction (any `priority > 0`)
   preempts it and it blends back when the reaction finishes.
@@ -229,13 +237,52 @@ Higher `priority` wins the head layer; equal priority means the newer clip wins
 `startle` at `30` preempts other reactions. When a triggered clip finishes it
 releases and the background idle blends back in.
 
-### Modes (`requires_mode`)
+### Modes (`requires_mode`) — what plays while walking
 
-`any` clips are safe standing, docked, or walking. `stand` clips have amplitude
-(or snap) that only reads well/safe when not walking. `walk` clips are the
-small-amplitude variants meant to overlay a gait. Trigger logic should respect
-`requires_mode` — e.g. don't fire `shake_no` mid-stride; fire `walk_alert`
-instead.
+Every emotion clip is `layer_mask="head"`, so it is *architecturally* safe in
+motion: the RL policy owns the legs and keeps balance while the head overlay
+rides on top (validated — no clip falls, tips past the 8.6° tilt bound, or hits a
+joint position/velocity limit while walking). So what decides whether a clip
+plays while walking is not safety but **legibility and character**, encoded in
+`requires_mode`:
+
+* **`any` (18 clips)** — plays standing, docked, **and** walking. The 12 neutral
+  idle/attention clips, plus **six emotion clips promoted after walk validation**:
+  `double_take`, `disappointed`, `suspicious_wary`, `nervous_lookaround`, and the
+  two communicative shakes `shake_no` / `shake_no_reluctant`. These both stay safe
+  and **track** over a gait (weighted head-follow corr 0.83–0.96), and read
+  correctly in motion.
+* **`walk` (6 clips)** — small-amplitude variants meant to overlay a gait:
+  `walk_look_around`, `walk_alert` (pre-existing) plus `walk_excited`,
+  `walk_greeting`, `walk_mood_sad`, `walk_mood_alert` (authored here). Use these
+  as the in-motion form of an emotion whose full-amplitude clip is illegible or
+  wrong while walking.
+* **`stand` (20 clips)** — standing/docked only; deliberately kept out of walking.
+  Three reasons, all validated (every one is *safe* walking — this is a character
+  and legibility call, not a safety one):
+  * **Wrong for a walking character.** A duck does not yawn or cower mid-march.
+    `sleepy_yawn`, `cower`, `flinch`, `calm_down`, `startle`, `mood_scared`,
+    `timid_shy` — withdrawn/fear/sleep poses that are incoherent in stride even
+    though they don't fall. (`nervous_lookaround` is the one fear-family
+    exception: an *unsettled* walk reads.)
+  * **Fast standing-tuned motion that doesn't track over a gait.** `excited`,
+    `grumpy_annoyed`, `mood_alert`, `mood_content` — their sharp yaw wiggles
+    measured 0.5–0.8 head-follow corr walking (the soft kp=8 head servo can't
+    chase them while the gait also perturbs the head). `excited` and the alert
+    mood are instead delivered in motion by `walk_excited` / `walk_mood_alert`.
+  * **Too subtle to read in motion.** `greeting`, `happy_bounce`, `perk_up`,
+    `proud_pleased`, `sad_droop`, `flustered`, `mood_grumpy`, `mood_sad`,
+    `mood_sleepy` — their motion sits at or below the ~0.08 rad gait disturbance
+    floor, so the gait sway swamps it. `greeting` and the sad mood are re-authored
+    for motion as `walk_greeting` / `walk_mood_sad`.
+* **`dock` (1 clip)** — `dock_wiggle`, the only full-body clip, dock-only.
+
+**Net: 24 of the 44 head clips are usable while walking (18 `any` + 6 `walk`),**
+including all four headline emotions the owner wanted in motion — an excited
+beat (`walk_excited`), an alert beat (`walk_alert` one-shot + `walk_mood_alert`
+loop), a greeting (`walk_greeting`), and a decisive **no** (`shake_no`, promoted).
+Trigger logic should still respect `requires_mode` — fire `walk_excited` rather
+than `excited` mid-stride — but nothing legible is now missing while walking.
 
 ### Blend times
 

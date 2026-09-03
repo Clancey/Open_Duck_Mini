@@ -579,10 +579,14 @@ def build_specs() -> List[ClipSpec]:
     ))
 
     # 6) Double-take: glance one way, snap back the other, settle. Blink on snap.
+    # requires_mode="any": phase-4 walk validation shows the yaw snap-back tracks
+    # cleanly over a gait (weighted corr ~0.95, peak tilt ~3.8°, no violations at
+    # ×0.5 AND ×1.0), and "notice something and re-check it" reads coherently
+    # mid-stride. Promoted from stand-only after measuring it walking.
     specs.append(ClipSpec(
-        name="double_take", authoring_path="blender", duration_s=2.4, loop_mode="once", requires_mode="stand",
+        name="double_take", authoring_path="blender", duration_s=2.4, loop_mode="once", requires_mode="any",
         priority=12, blend_in_s=0.15, blend_out_s=0.35,
-        doc="Glance away then a quick snap-back double-take. Stand only (snappy).",
+        doc="Glance away then a quick snap-back double-take. Tracks cleanly walking (validated).",
         head_yaw=keys([(0.0, 0.0), (0.4, 0.18, "ease_out"), (0.8, 0.18, "hold"),
                        (1.15, -0.38, "ease_out"), (1.7, -0.34, "hold"),
                        (2.4, 0.0, "smooth")]),
@@ -683,10 +687,17 @@ def build_specs() -> List[ClipSpec]:
     # soft kp=8 head servo can still track it (fast oscillation would lag). A hair
     # of counter-roll keeps it from reading mechanical. Distinct from idle scans:
     # bigger, faster, alternating, and it returns dead-centre.
+    #
+    # requires_mode="any": this is the headline gate fix. `nod_yes` was already
+    # "any" while `shake_no` was stand-only — the duck could say yes but not no
+    # while walking, which is plainly wrong. Phase-4 walk validation shows the
+    # yaw shake tracks cleanly over a gait (weighted corr ~0.90, peak tilt ~3.8°,
+    # zero pos/vel violations at ×0.5 AND ×1.0), so a legible "no" is now
+    # available in motion.
     specs.append(ClipSpec(
-        name="shake_no", authoring_path="blender", duration_s=2.5, loop_mode="once", requires_mode="stand",
+        name="shake_no", authoring_path="blender", duration_s=2.5, loop_mode="once", requires_mode="any",
         priority=20, blend_in_s=0.15, blend_out_s=0.3,
-        doc="Decisive negative shake (no): wind-up + firm alternating swings that decay.",
+        doc="Decisive negative shake (no): wind-up + firm alternating swings that decay. Tracks cleanly walking (validated).",
         head_yaw=keys([(0.0, 0.0),
                        (0.25, -0.10, "ease_out"),     # anticipation: a small wind-up
                        (0.58, 0.42, "ease_out"),      # swing 1 (decisive)
@@ -703,11 +714,14 @@ def build_specs() -> List[ClipSpec]:
 
     # 10b) Reluctant no: a slower, smaller shake with the chin sinking (aversion)
     # and a slight persistent downward tilt. A hesitant "...no", genuinely
-    # different from the firm refusal above.
+    # different from the firm refusal above. Promoted to "any" alongside `shake_no`
+    # (and matching `nod_yes_soft`, which is already "any"): walk validation shows
+    # the smaller yaw shake tracks over a gait (corr ~0.83, tilt ~3.9°, no
+    # violations), so both the firm and the reluctant "no" are usable while walking.
     specs.append(ClipSpec(
-        name="shake_no_reluctant", authoring_path="blender", duration_s=2.8, loop_mode="once", requires_mode="stand",
+        name="shake_no_reluctant", authoring_path="blender", duration_s=2.8, loop_mode="once", requires_mode="any",
         priority=13, blend_in_s=0.25, blend_out_s=0.4,
-        doc="Reluctant/hesitant no: a slow small shake with the chin dropping in aversion.",
+        doc="Reluctant/hesitant no: a slow small shake with the chin dropping in aversion. Tracks walking (validated).",
         head_yaw=keys([(0.0, 0.0),
                        (0.60, -0.17, "ease_out"),     # a slow, small turn away
                        (1.35, 0.13, "smooth"),        # slow return past centre
@@ -901,11 +915,14 @@ def build_specs() -> List[ClipSpec]:
 
     # E6) Disappointed: the let-down — a small hopeful lift, then a slow sink
     # with a sigh and a turn-away. The anticipation beat separates it from sad.
+    # requires_mode="any": walk validation shows the head_pitch let-down tracks
+    # cleanly over a gait (corr ~0.96, tilt ~4.2°, no violations); a disappointed
+    # trudge reads coherently while walking.
     specs.append(ClipSpec(
         name="disappointed", authoring_path="blender", duration_s=3.0,
-        loop_mode="once", requires_mode="stand", priority=16, blend_in_s=0.3,
+        loop_mode="once", requires_mode="any", priority=16, blend_in_s=0.3,
         blend_out_s=0.5,
-        doc="Disappointed: a hopeful lift then a slow let-down sink with a sigh.",
+        doc="Disappointed: a hopeful lift then a slow let-down sink with a sigh. Tracks walking (validated).",
         head_pitch=keys([(0.0, 0.0), (0.5, -0.08, "ease_out"), (0.9, -0.07, "hold"),
                          (1.8, 0.14, "smooth"), (2.5, 0.12, "hold"),
                          (3.0, 0.0, "smooth")]),          # hope up -> sink down
@@ -921,11 +938,14 @@ def build_specs() -> List[ClipSpec]:
 
     # E7) Suspicious / wary: a cocked tilt held, a slight lean-in, a slow narrow
     # scan, wary half-back antennas. Suspicion lives in the sustained cock.
+    # requires_mode="any": the slow narrow yaw scan tracks over a gait (corr
+    # ~0.87, tilt ~4.0°, no violations); a wary, suspicious approach is a coherent
+    # walking beat.
     specs.append(ClipSpec(
         name="suspicious_wary", authoring_path="blender", duration_s=3.4,
-        loop_mode="once", requires_mode="stand", priority=14, blend_in_s=0.3,
+        loop_mode="once", requires_mode="any", priority=14, blend_in_s=0.3,
         blend_out_s=0.4,
-        doc="Suspicious/wary: cocked tilt, lean-in, slow narrow scan, wary antennas.",
+        doc="Suspicious/wary: cocked tilt, lean-in, slow narrow scan, wary antennas. Tracks walking (validated).",
         head_roll=keys([(0.0, 0.0), (0.8, 0.11, "ease_out"), (2.6, 0.11, "hold"),
                         (3.4, 0.0, "smooth")]),           # held cock
         head_yaw=keys([(0.0, 0.0), (1.2, -0.18, "ease_out"), (1.8, -0.17, "hold"),
@@ -1048,7 +1068,9 @@ def build_specs() -> List[ClipSpec]:
     # useful here: a fast pin-BACK (ears flattened) reads unmistakably as fear, and
     # a slow un-pin reads as the tension leaving. Eyes go WIDE (the runtime `wide`
     # event holds them open ~1 s). All are stand-only: the poses are withdrawn and
-    # large enough that they don't belong over a gait.
+    # large enough that they don't belong over a gait — EXCEPT
+    # `nervous_lookaround`, whose darting scan (not a withdrawn recoil pose) tracks
+    # cleanly while walking and is promoted to "any" (see its note below).
 
     # S1) Flinch: a fast aversive recoil — head snaps back and AVERTS to the side,
     # ears pin back, eyes snap wide — then a SLOW, tentative return (the recovery
@@ -1102,10 +1124,15 @@ def build_specs() -> List[ClipSpec]:
     # left/right that decay, over a slightly withdrawn carriage, ears held wary
     # half-back, eyes wide. The darts are quick but not oscillatory (each reaches
     # and briefly holds) so the soft head servo still tracks them.
+    # requires_mode="any": alone among the fear beats, this one is scanning motion
+    # (not a withdrawn recoil pose), and walk validation shows the darting yaw
+    # checks track cleanly over a gait (corr ~0.91, tilt ~3.9°, no violations).
+    # "Nervously checking around while moving" is a coherent walking beat, so this
+    # is promoted where the other CS beats stay stand-only.
     specs.append(ClipSpec(
         name="nervous_lookaround", authoring_path="blender", duration_s=3.2, loop_mode="once",
-        requires_mode="stand", priority=23, blend_in_s=0.1, blend_out_s=0.35,
-        doc="Nervous look-around: tense darting threat-checks over a withdrawn, wary carriage.",
+        requires_mode="any", priority=23, blend_in_s=0.1, blend_out_s=0.35,
+        doc="Nervous look-around: tense darting threat-checks over a withdrawn, wary carriage. Tracks walking (validated).",
         head_pitch=keys([(0.0, 0.0), (0.4, 0.05, "ease_out"), (2.6, 0.045, "hold"),
                          (3.2, 0.0, "smooth")]),                            # slightly withdrawn
         head_yaw=keys([(0.0, 0.0),
@@ -1190,6 +1217,105 @@ def build_specs() -> List[ClipSpec]:
         antenna_r=keys([(0.0, 0.0), (0.35, 0.25, "ease_out"), (1.4, 0.2, "hold"),
                         (2.0, 0.05)]),
         events=(("eye", "blink", 0.4),),
+    ))
+
+    # 16) Excited / happy while walking: the mid-stride version of `excited`. The
+    # full `excited` stays stand-only because its read is a fast side-to-side yaw
+    # WIGGLE, and a rapid oscillation does not track over a gait (measured walk
+    # corr ~0.70 — the gait sway swamps the wiggle). This variant rebuilds the
+    # same delight from a clean CHANNEL the soft servo can hold at speed: a bright
+    # double chin-UP bob on head_pitch (its dominant read, ~4× headroom, clears
+    # the ~0.08 rad walk disturbance floor), a bright finishing tilt, and only a
+    # SMALL yaw accent kept below the floor so it colours the motion without
+    # reintroducing the untrackable wiggle. Antennas flick bright (a one-shot, so
+    # allowed). Reads as "yay!" while moving.
+    specs.append(ClipSpec(
+        name="walk_excited", authoring_path="blender", duration_s=2.2, loop_mode="once",
+        requires_mode="walk", priority=16, blend_in_s=0.12, blend_out_s=0.3,
+        doc="Excited/happy beat usable mid-stride: bright double chin-up bob + tilt, crisp not wiggly.",
+        head_pitch=(pulse(0.42, 0.32, -0.22) + pulse(1.02, 0.32, -0.18)),   # bright chin-up bobs (the read)
+        neck_pitch=(pulse(0.42, 0.34, -0.04) + pulse(1.02, 0.34, -0.035)),  # a hint of body bounce (neck maxed)
+        head_roll=pulse(1.55, 0.45, 0.11),                                  # bright finishing tilt
+        head_yaw=(pulse(0.65, 0.3, 0.08) + pulse(1.2, 0.3, -0.06)),         # small accent, kept below floor
+        antenna_l=(pulse(0.42, 0.24, 0.42) + pulse(1.0, 0.24, 0.34)),       # bright crisp flicks
+        antenna_r=(pulse(0.42, 0.24, 0.42) + pulse(1.0, 0.24, 0.34)),
+        events=(("eye", "happy", 0.42), ("eye", "happy", 1.02)),            # rapid double
+    ))
+
+    # 17) Greeting while walking: the mid-stride "hello" — walking toward someone
+    # and acknowledging them. The full `greeting` stays stand-only because its
+    # read leans on a small head_pitch bob (~0.12 ptp) plus antennas + eyes, and
+    # the bob barely clears the walk disturbance floor. This variant leads instead
+    # with a clear yaw turn-TOWARD (head_yaw has huge headroom and tracks cleanly
+    # walking), leading with a warm double nod (the trackable "hello", clears the
+    # walk floor like the excited bobs do) and layering a slight turn-toward, a
+    # friendly tilt and a bright antenna raise on top. The nod is the read; the
+    # turn is a sub-floor accent so the gait never has to blur a held look.
+    specs.append(ClipSpec(
+        name="walk_greeting", authoring_path="blender", duration_s=2.4, loop_mode="once",
+        requires_mode="walk", priority=16, blend_in_s=0.15, blend_out_s=0.3,
+        doc="Friendly 'hello' usable mid-stride: warm nods with a slight turn-toward, tilt and antenna raise.",
+        head_pitch=(pulse(0.5, 0.35, 0.21) + pulse(1.1, 0.35, 0.17)),      # warm greeting nods (the read)
+        head_yaw=keys([(0.0, 0.0), (0.5, 0.17, "ease_out"), (1.2, 0.15, "hold"),
+                       (2.0, 0.0, "smooth")]),                              # slight turn-toward (sub-floor accent)
+        neck_pitch=(pulse(0.5, 0.4, 0.03) + pulse(1.1, 0.4, 0.025)),
+        head_roll=pulse(1.55, 0.5, 0.10),                                  # friendly tilt (after the nods)
+        antenna_l=keys([(0.0, 0.0), (0.45, 0.28, "ease_out"), (1.4, 0.24, "hold"),
+                        (2.4, 0.05)]),                                     # bright raise
+        antenna_r=keys([(0.0, 0.0), (0.45, 0.28, "ease_out"), (1.4, 0.24, "hold"),
+                        (2.4, 0.05)]),
+        events=(("eye", "happy", 0.5),),                                   # friendly double blink
+    ))
+
+    # ---- D2. Walk-compatible mood loops (wrap, requires_mode=walk) -----------
+    # A walking duck can CARRY a mood, not just do a reaction. The stand `mood_*`
+    # loops stay stand-only: they carry sharp standing-tuned scans that do not
+    # track over a gait (measured walk corr 0.5–0.8), and their subtle carriage
+    # sits right at the disturbance floor. These two rebuild the strongest,
+    # clearest contrast — a SAD walk vs an ALERT walk — as posture the gait can't
+    # wash out: a persistent carriage (chin + roll bias) plus only a slow, small,
+    # sub-floor gaze motion. Antennas stay flat at rest (wrap/background rule,
+    # owner decision, enforced by the library guard test). Periods (9.5 / 7.5) are
+    # co-prime-ish with walk_look_around (7.0) so no two walking layers ever sync.
+
+    # 18) Sad walk: a dejected trudge — sunk chin, a slight persistent roll-lean,
+    # slow and heavy, barely looking around, a slow heavy blink. The mood is in
+    # the CARRIAGE (which rides through the gait), not in any scan.
+    d = 9.5
+    f = 1.0 / d
+    specs.append(ClipSpec(
+        name="walk_mood_sad", duration_s=d, loop_mode="wrap", requires_mode="walk",
+        priority=5, blend_in_s=0.6, blend_out_s=0.7, show_blend_in_s=0.1,
+        show_blend_out_s=0.1,
+        doc="Sad mood to carry WHILE walking: sunk drooped carriage + persistent lean, a heavy blink.",
+        neck_pitch=const(0.03) + sine(f, 0.010, 0.0),     # tiny sink (neck maxed)
+        head_pitch=const(0.13) + sine(f, 0.018, np.pi),   # sunk carriage + slow sigh
+        head_roll=const(0.07) + sine(f, 0.016, 0.5),      # persistent dejected lean
+        head_yaw=drift((f, 0.045, 0.2), (2 * f, 0.02, 1.0)),  # barely looks around (sub-floor)
+        antenna_l=ZERO, antenna_r=ZERO,
+        events=(("eye", "slow_blink", 4.0),),             # one slow heavy blink
+    ))
+
+    # 19) Alert walk: a purposeful, attentive stride — upright lifted carriage,
+    # small sharp gaze checks kept below the floor (so the read is the alert
+    # POSTURE, not a scan the gait would blur), rare wide blink. The direct
+    # contrast to the sad walk.
+    d = 7.5
+    f = 1.0 / d
+    specs.append(ClipSpec(
+        name="walk_mood_alert", duration_s=d, loop_mode="wrap", requires_mode="walk",
+        priority=5, blend_in_s=0.3, blend_out_s=0.4, show_blend_in_s=0.1,
+        show_blend_out_s=0.1,
+        doc="Alert mood to carry WHILE walking: upright lifted attentive carriage with small sharp checks.",
+        neck_pitch=sine(2 * f, 0.010, 0.0),
+        head_pitch=const(-0.07) + sine(2 * f, 0.010, np.pi),  # attentive lift
+        head_yaw=keys([(0.0, 0.0), (1.2, 0.09, "ease_out"), (1.6, 0.09, "hold"),
+                       (2.0, 0.0, "ease_in"), (4.6, 0.0, "hold"),
+                       (5.2, -0.08, "ease_out"), (5.6, -0.08, "hold"),
+                       (6.1, 0.0, "ease_in")], loop=True, duration=d),  # small checks, kept sub-floor
+        head_roll=sine(2 * f, 0.012, 0.7),
+        antenna_l=ZERO, antenna_r=ZERO,
+        eyes=((0.0, 1), (3.6, 0), (3.68, 1)),             # one crisp blink, wide otherwise
     ))
 
     return specs
